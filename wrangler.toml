@@ -1,0 +1,5 @@
+name = "xr-triage-web"
+compatibility_date = "2024-09-23"
+
+[site]
+bucket = "./dist"
