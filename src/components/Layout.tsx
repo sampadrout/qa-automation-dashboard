@@ -1,12 +1,13 @@
-import { Outlet, Link, useNavigate } from 'react-router-dom'
+import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
-import { LogOut, FlaskConical } from 'lucide-react'
+import { LogOut, FlaskConical, BarChart2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 interface Props { session: Session }
 
 export default function Layout({ session }: Props) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -20,7 +21,22 @@ export default function Layout({ session }: Props) {
           <FlaskConical size={20} />
           XR Triage
         </Link>
-        <div className="flex items-center gap-4">
+        <nav className="flex items-center gap-1 ml-8">
+          <Link
+            to="/"
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${pathname === '/' ? 'bg-brand-50 text-brand-600' : 'text-gray-500 hover:text-gray-800'}`}
+          >
+            Cycles
+          </Link>
+          <Link
+            to="/analytics"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${pathname.startsWith('/analytics') ? 'bg-brand-50 text-brand-600' : 'text-gray-500 hover:text-gray-800'}`}
+          >
+            <BarChart2 size={15} />
+            Analytics
+          </Link>
+        </nav>
+        <div className="flex items-center gap-4 ml-auto">
           <span className="text-sm text-gray-500">{session.user.email}</span>
           <button
             onClick={handleLogout}
