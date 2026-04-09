@@ -43,18 +43,14 @@ export default function Cycles() {
     setUploadError(null)
 
     try {
-      // 1. Upload ZIP to Supabase Storage
-      const storagePath = `uploads/${file.name}`
-      const { error: storageErr } = await supabase.storage
-        .from('test-zips')
-        .upload(storagePath, file, { upsert: true })
-      if (storageErr) throw storageErr
+      // Send ZIP directly to the edge function as FormData — no Storage needed.
+      const formData = new FormData()
+      formData.append('file', file)
 
-      // 2. Call edge function to process the ZIP
       const { error: fnErr } = await supabase.functions.invoke('process-zip', {
-        body: { storage_path: storagePath, filename: file.name },
+        body: formData,
       })
-      if (fnErr) throw fnErr
+      if (fnErr) throw new Error((fnErr as { message?: string }).message ?? 'Processing failed')
 
       queryClient.invalidateQueries({ queryKey: ['cycles'] })
     } catch (err: unknown) {

@@ -118,8 +118,13 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     )
 
-    const { storage_path, filename } = await req.json() as { storage_path: string; filename: string }
-    const cycleName = filename.replace(/\.zip$/i, '')
+    // ── Read ZIP from multipart FormData ──────────────────────────────────────
+    const formData = await req.formData()
+    const uploadedFile = formData.get('file') as File
+    if (!uploadedFile) throw new Error('No file found in request')
+
+    const cycleName = uploadedFile.name.replace(/\.zip$/i, '')
+    const arrayBuffer = await uploadedFile.arrayBuffer()
 
     // ── Create cycle row (status=processing) ──────────────────────────────────
     const { data: cycleData, error: cycleInsertErr } = await supabase
@@ -132,13 +137,6 @@ serve(async (req) => {
     const cycleId = cycleData.id
 
     try {
-      // ── Download ZIP from storage ──────────────────────────────────────────
-      const { data: fileData, error: dlErr } = await supabase.storage
-        .from('test-zips')
-        .download(storage_path)
-      if (dlErr) throw dlErr
-
-      const arrayBuffer = await fileData.arrayBuffer()
       const zip = await JSZip.loadAsync(arrayBuffer)
 
       // ── Detect content type ────────────────────────────────────────────────
