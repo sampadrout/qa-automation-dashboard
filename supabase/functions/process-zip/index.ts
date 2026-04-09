@@ -110,11 +110,12 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const authHeader = req.headers.get('Authorization')!
+    // Use service role key directly — bypasses RLS for all DB writes.
+    // Do NOT pass the user's Authorization header here as it would override
+    // the service role and subject inserts to RLS policies.
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-      { global: { headers: { Authorization: authHeader } } },
     )
 
     const { storage_path, filename } = await req.json() as { storage_path: string; filename: string }

@@ -60,11 +60,18 @@ async function fetchAllTitles(): Promise<ScriptRow[]> {
 // ── Tooltip formatter ─────────────────────────────────────────────────────────
 function pct(v: string | number) { return `${v}%` }
 
+// "2026-03-12" → "Mar 12"
+function fmtDate(d: string) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  const parts = d.split('-')
+  return `${months[parseInt(parts[1]) - 1]} ${parseInt(parts[2])}`
+}
+
 // ── Tab: Summary ──────────────────────────────────────────────────────────────
 function SummaryTab() {
   const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles })
   const { data: failed = [], isLoading: lf } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults })
-  const [moduleFilter, setModuleFilter] = useState('')
+  const [moduleFilter, setModuleFilter] = useState<string | null>(null)
 
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
@@ -72,93 +79,114 @@ function SummaryTab() {
   const modules = useMemo(() =>
     [...new Set(failed.map(r => r.module).filter(Boolean))].sort() as string[], [failed])
 
-  // Filtered rows
-  const rows = useMemo(() =>
-    moduleFilter ? failed.filter(r => r.module === moduleFilter) : failed,
-    [failed, moduleFilter])
+  // Default to first module once data loads
+  const activeModule = moduleFilter ?? modules[0] ?? ''
 
-  // All triage types present in filtered data (sorted by total desc)
-  const triageTypes = useMemo(() => {
+  // All failures regardless of module (for chart)
+  const allTriageTypes = useMemo(() => {
     const counts: Record<string, number> = {}
-    rows.forEach(r => {
+    failed.forEach(r => {
       const t = r.triage_type || 'Untriaged'
       counts[t] = (counts[t] || 0) + 1
     })
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([t]) => t)
-  }, [rows])
+  }, [failed])
 
-  // Chart data: one entry per cycle date
+  // Chart data: all modules stacked bar (one bar per date)
   const chartData = useMemo(() => {
     const byDate: Record<string, Record<string, number>> = {}
     cycles.forEach(c => { byDate[c.name] = {} })
-    rows.forEach(r => {
+    failed.forEach(r => {
       const date = cycleMap[r.cycle_id]
       if (!date) return
       const t = r.triage_type || 'Untriaged'
       byDate[date][t] = (byDate[date][t] || 0) + 1
     })
-    return Object.entries(byDate).map(([date, counts]) => ({ date, ...counts }))
-  }, [rows, cycles, cycleMap])
+    return Object.entries(byDate).map(([date, counts]) => ({ date, label: fmtDate(date), ...counts }))
+  }, [failed, cycles, cycleMap])
 
-  // Module-wise table: module → triage type → total across all dates
-  const moduleTable = useMemo(() => {
-    const map: Record<string, Record<string, number>> = {}
-    rows.forEach(r => {
-      const mod = r.module || 'unknown'
+  // Table: date × triage type for the selected module
+  const moduleRows = useMemo(() => {
+    const filtered = failed.filter(r => r.module === activeModule)
+    const byDate: Record<string, Record<string, number>> = {}
+    cycles.forEach(c => { byDate[c.name] = {} })
+    filtered.forEach(r => {
+      const date = cycleMap[r.cycle_id]
+      if (!date) return
       const t = r.triage_type || 'Untriaged'
-      if (!map[mod]) map[mod] = {}
-      map[mod][t] = (map[mod][t] || 0) + 1
+      byDate[date][t] = (byDate[date][t] || 0) + 1
     })
-    return Object.entries(map)
-      .map(([mod, counts]) => ({ mod, total: Object.values(counts).reduce((a, b) => a + b, 0), counts }))
-      .sort((a, b) => b.total - a.total)
-  }, [rows])
+    return Object.entries(byDate).map(([date, counts]) => ({
+      date,
+      total: Object.values(counts).reduce((a, b) => a + b, 0),
+      counts,
+    }))
+  }, [failed, cycles, cycleMap, activeModule])
+
+  // Triage types present for the selected module
+  const moduleTriageTypes = useMemo(() => {
+    const counts: Record<string, number> = {}
+    moduleRows.forEach(r => Object.entries(r.counts).forEach(([t, n]) => {
+      counts[t] = (counts[t] || 0) + n
+    }))
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([t]) => t)
+  }, [moduleRows])
 
   if (lc || lf) return <Spinner />
 
   return (
     <div className="space-y-8">
-      {/* Filter */}
-      <div className="flex items-center gap-3">
-        <label className="text-sm font-medium text-gray-600">Module:</label>
-        <select
-          value={moduleFilter}
-          onChange={e => setModuleFilter(e.target.value)}
-          className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
-        >
-          <option value="">All Modules</option>
-          {modules.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
-      </div>
-
-      {/* Stacked bar: failures by triage type over time */}
-      <Section title="Failure Distribution by Triage Type Over Time">
-        <ResponsiveContainer width="100%" height={320}>
-          <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 40 }}>
+      {/* Stacked bar: all modules, failures by triage type over time */}
+      <Section title="Failure Distribution by Triage Type Over Time (All Modules)">
+        <ResponsiveContainer width="100%" height={360}>
+          <BarChart data={chartData} margin={{ top: 8, right: 24, left: 0, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="date" tick={{ fontSize: 11 }} angle={-35} textAnchor="end" interval={0} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-            {triageTypes.map(t => (
+            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 12 }} width={35} />
+            <Tooltip labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''} />
+            <Legend
+              layout="vertical"
+              align="right"
+              verticalAlign="middle"
+              wrapperStyle={{ fontSize: 11, paddingLeft: 16 }}
+            />
+            {allTriageTypes.map(t => (
               <Bar key={t} dataKey={t} stackId="a" fill={CHART_COLORS[t] ?? '#cbd5e1'} />
             ))}
           </BarChart>
         </ResponsiveContainer>
       </Section>
 
-      {/* Module-wise breakdown table */}
-      <Section title="Module-wise Failure Breakdown (All Dates)">
+      {/* Date × Triage breakdown for selected module */}
+      <Section title="Date-wise Failure Breakdown by Triage Type">
+        <div className="flex items-center gap-3 mb-4">
+          <label className="text-sm font-medium text-gray-600">Module:</label>
+          <div className="flex flex-wrap gap-2">
+            {modules.map(m => (
+              <button
+                key={m}
+                onClick={() => setModuleFilter(m)}
+                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                  m === activeModule
+                    ? 'bg-brand-600 text-white border-brand-600'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-brand-400'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-3 py-2 text-left font-semibold text-gray-600">Module</th>
-                <th className="px-3 py-2 text-right font-semibold text-gray-600">Total Failures</th>
-                {triageTypes.map(t => (
-                  <th key={t} className="px-3 py-2 text-right font-semibold text-gray-600 whitespace-nowrap">
+                <th className="px-3 py-2 text-left font-semibold text-gray-600 whitespace-nowrap">Date</th>
+                <th className="px-3 py-2 text-center font-semibold text-gray-600 whitespace-nowrap">Total</th>
+                {moduleTriageTypes.map(t => (
+                  <th key={t} className="px-3 py-2 text-center font-semibold text-gray-600 whitespace-nowrap">
                     <span
-                      className="inline-block w-2 h-2 rounded-full mr-1"
+                      className="inline-block w-2 h-2 rounded-full mr-1 align-middle"
                       style={{ background: CHART_COLORS[t] ?? '#cbd5e1' }}
                     />
                     {t}
@@ -167,13 +195,20 @@ function SummaryTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {moduleTable.map(({ mod, total, counts }) => (
-                <tr key={mod} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 font-medium text-gray-800">{mod}</td>
-                  <td className="px-3 py-2 text-right font-semibold text-red-600">{total}</td>
-                  {triageTypes.map(t => (
-                    <td key={t} className="px-3 py-2 text-right text-gray-600">
-                      {counts[t] ?? '—'}
+              {moduleRows.map(({ date, total, counts }) => (
+                <tr key={date} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{date}</td>
+                  <td className="px-3 py-2 text-center font-semibold text-red-600">{total || '—'}</td>
+                  {moduleTriageTypes.map(t => (
+                    <td key={t} className="px-3 py-2 text-center text-gray-600">
+                      {counts[t] ? (
+                        <span
+                          className="inline-block px-2 py-0.5 rounded text-xs font-medium"
+                          style={{ background: CHART_COLORS[t] + '22', color: CHART_COLORS[t] }}
+                        >
+                          {counts[t]}
+                        </span>
+                      ) : '—'}
                     </td>
                   ))}
                 </tr>
