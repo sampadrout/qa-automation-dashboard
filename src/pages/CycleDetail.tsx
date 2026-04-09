@@ -100,6 +100,7 @@ export default function CycleDetail() {
       // Remove from dirty edits after save
       setEdits(prev => { const n = { ...prev }; delete n[row.id]; return n })
       queryClient.invalidateQueries({ queryKey: ['test_results', id] })
+      queryClient.invalidateQueries({ queryKey: ['failed-results'] })
     } finally {
       setSaving(null)
     }
@@ -227,27 +228,31 @@ export default function CycleDetail() {
                         {row.duration_s != null ? `${row.duration_s}s` : '—'}
                       </td>
                       <td className="px-3 py-2.5">
-                        <select
-                          value={edit.triage_type}
-                          onChange={e => setEdit(row.id, { triage_type: e.target.value as TriageType })}
-                          className={`w-full text-xs rounded px-2 py-1.5 border focus:outline-none focus:ring-1 focus:ring-brand-500 ${TRIAGE_COLORS[edit.triage_type] ?? 'bg-gray-100'}`}
-                        >
-                          {TRIAGE_TYPES.map(t => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
+                        {row.state !== 'passed' && (
+                          <select
+                            value={edit.triage_type}
+                            onChange={e => setEdit(row.id, { triage_type: e.target.value as TriageType })}
+                            className={`w-full text-xs rounded px-2 py-1.5 border focus:outline-none focus:ring-1 focus:ring-brand-500 ${TRIAGE_COLORS[edit.triage_type] ?? 'bg-gray-100'}`}
+                          >
+                            {TRIAGE_TYPES.map(t => (
+                              <option key={t} value={t}>{t}</option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
-                        <input
-                          type="text"
-                          value={edit.triage_desc}
-                          onChange={e => setEdit(row.id, { triage_desc: e.target.value })}
-                          placeholder="Add description…"
-                          className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                        />
+                        {row.state !== 'passed' && (
+                          <input
+                            type="text"
+                            value={edit.triage_desc}
+                            onChange={e => setEdit(row.id, { triage_desc: e.target.value })}
+                            placeholder="Add description…"
+                            className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                          />
+                        )}
                       </td>
                       <td className="px-3 py-2.5 whitespace-nowrap">
-                        {dirty && (
+                        {dirty && row.state !== 'passed' && (
                           <button
                             onClick={() => saveRow(row)}
                             disabled={isSaving}
