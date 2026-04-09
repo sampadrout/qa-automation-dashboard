@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Save, Loader2, Filter, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { TRIAGE_TYPES, TRIAGE_COLORS } from '@/lib/constants'
+import { useTriageTypes } from '@/lib/hooks'
 import StateBadge from '@/components/StateBadge'
 import type { TestResult, Cycle, TriageType } from '@/lib/types'
 
@@ -23,6 +23,7 @@ export default function CycleDetail() {
   const [triageFilter, setTriageFilter] = useState('')
   const [edits, setEdits] = useState<Edits>({})
   const [saving, setSaving] = useState<string | null>(null)
+  const { types: triageTypes, colors: triageColors } = useTriageTypes()
 
   const { data: cycle } = useQuery<Cycle>({
     queryKey: ['cycle', id],
@@ -163,7 +164,7 @@ export default function CycleDetail() {
           className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
         >
           <option value="">All Triage</option>
-          {TRIAGE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          {triageTypes.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         {(moduleFilter || stateFilter || triageFilter) && (
           <button
@@ -232,9 +233,13 @@ export default function CycleDetail() {
                           <select
                             value={edit.triage_type}
                             onChange={e => setEdit(row.id, { triage_type: e.target.value as TriageType })}
-                            className={`w-full text-xs rounded px-2 py-1.5 border focus:outline-none focus:ring-1 focus:ring-brand-500 ${TRIAGE_COLORS[edit.triage_type] ?? 'bg-gray-100'}`}
+                            className="w-full text-xs rounded px-2 py-1.5 border focus:outline-none focus:ring-1 focus:ring-brand-500"
+                            style={(() => {
+                              const c = triageColors[edit.triage_type]
+                              return c ? { background: c + '25', color: c } : { background: '#f3f4f6' }
+                            })()}
                           >
-                            {TRIAGE_TYPES.map(t => (
+                            {triageTypes.map(t => (
                               <option key={t} value={t}>{t}</option>
                             ))}
                           </select>

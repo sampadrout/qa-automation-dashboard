@@ -1,13 +1,15 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
-import { LogOut, FlaskConical, BarChart2 } from 'lucide-react'
+import { LogOut, FlaskConical, BarChart2, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { useIsAdmin } from '@/lib/hooks'
 
 interface Props { session: Session }
 
 export default function Layout({ session }: Props) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const isAdmin = useIsAdmin()
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -35,6 +37,15 @@ export default function Layout({ session }: Props) {
             <BarChart2 size={15} />
             Analytics
           </Link>
+          {isAdmin && (
+            <Link
+              to="/settings"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${pathname.startsWith('/settings') ? 'bg-brand-50 text-brand-600' : 'text-gray-500 hover:text-gray-800'}`}
+            >
+              <Settings size={15} />
+              Settings
+            </Link>
+          )}
         </nav>
         <div className="flex items-center gap-4 ml-auto">
           <span className="text-sm text-gray-500">{session.user.email}</span>

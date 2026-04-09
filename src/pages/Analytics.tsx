@@ -6,23 +6,8 @@ import {
 } from 'recharts'
 import { Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { useTriageTypes } from '@/lib/hooks'
 import type { Cycle } from '@/lib/types'
-
-// ── Chart colours per triage type ────────────────────────────────────────────
-const CHART_COLORS: Record<string, string> = {
-  'Script Issue':                '#fbbf24',
-  'Application Issue':           '#ef4444',
-  'Environment Issue':           '#f97316',
-  'Environment / Timeout Issue': '#fb923c',
-  'Performance Issue':           '#a855f7',
-  'Login Issue':                 '#ec4899',
-  'Needs different login':       '#f472b6',
-  'Timeout Issue':               '#f59e0b',
-  'Data Issue':                  '#3b82f6',
-  'Access Issue':                '#dc2626',
-  'UI Change':                   '#6366f1',
-  'Untriaged':                   '#9ca3af',
-}
 
 const TABS = ['Summary', 'New Scripts', 'Failure Matrix'] as const
 type Tab = typeof TABS[number]
@@ -99,6 +84,7 @@ function fmtDate(d: string) {
 function SummaryTab() {
   const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: failed = [], isLoading: lf } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
+  const { colors: CHART_COLORS } = useTriageTypes()
 
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
@@ -463,6 +449,7 @@ function NewScriptsTab() {
 function FailureMatrixTab() {
   const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: failed = [], isLoading: lf } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
+  const { colors: CHART_COLORS } = useTriageTypes()
   const [activeModule, setActiveModule] = useState<string | null>(null)
   const [search, setSearch] = useState('')
 
