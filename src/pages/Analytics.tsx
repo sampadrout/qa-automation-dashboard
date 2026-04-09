@@ -60,11 +60,23 @@ async function fetchAllTitles(): Promise<ScriptRow[]> {
 // ── Tooltip formatter ─────────────────────────────────────────────────────────
 function pct(v: string | number) { return `${v}%` }
 
-// "2026-03-12" → "Mar 12"
+// Handles "2026-03-12" → "Mar 12"  and  "20260407.1" → "Apr 7"
 function fmtDate(d: string) {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  const parts = d.split('-')
-  return `${months[parseInt(parts[1]) - 1]} ${parseInt(parts[2])}`
+  if (d.includes('-')) {
+    const parts = d.split('-')
+    if (parts.length >= 3) {
+      const m = parseInt(parts[1])
+      const day = parseInt(parts[2])
+      if (m >= 1 && m <= 12) return `${months[m - 1]} ${day}`
+    }
+  }
+  const match = d.match(/^(\d{4})(\d{2})(\d{2})/)
+  if (match) {
+    const m = parseInt(match[2])
+    if (m >= 1 && m <= 12) return `${months[m - 1]} ${parseInt(match[3])}`
+  }
+  return d
 }
 
 // ── Tab: Summary ──────────────────────────────────────────────────────────────
