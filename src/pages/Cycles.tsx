@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Upload, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, ChevronRight } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { extractZip } from '@/lib/processZip'
 import type { Cycle } from '@/lib/types'
 
 function StatusIcon({ status }: { status: string }) {
@@ -43,14 +44,42 @@ export default function Cycles() {
     setUploadError(null)
 
     try {
-      // Send ZIP directly to the edge function as FormData — no Storage needed.
-      const formData = new FormData()
-      formData.append('file', file)
+      // 1. Parse ZIP in the browser
+      const { cycleName, rows } = await extractZip(file)
 
-      const { error: fnErr } = await supabase.functions.invoke('process-zip', {
-        body: formData,
-      })
-      if (fnErr) throw new Error((fnErr as { message?: string }).message ?? 'Processing failed')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const db = supabase as any
+
+      // 2. Create cycle row
+      const { data: cycleData, error: cycleErr } = await db
+        .from('cycles')
+        .insert({ name: cycleName, status: 'processing' })
+        .select('id')
+        .single()
+      if (cycleErr) throw cycleErr
+
+      const cycleId = (cycleData as { id: string }).id
+
+      // 3. Insert test_results in batches of 500
+      const BATCH = 500
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const { error: insErr } = await db
+          .from('test_results')
+          .insert(rows.slice(i, i + BATCH).map(r => ({ ...r, cycle_id: cycleId })))
+        if (insErr) throw insErr
+      }
+
+      // 4. Update cycle with final stats
+      const passed  = rows.filter(r => r.state === 'passed').length
+      const failed  = rows.filter(r => r.state === 'failed').length
+      const pending = rows.filter(r => r.state === 'pending').length
+      await db.from('cycles').update({
+        status: 'ready',
+        total_tests: rows.length,
+        passed,
+        failed,
+        pending,
+      }).eq('id', cycleId)
 
       queryClient.invalidateQueries({ queryKey: ['cycles'] })
     } catch (err: unknown) {
