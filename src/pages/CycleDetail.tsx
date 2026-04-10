@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Save, Loader2, Filter, X } from 'lucide-react'
+import { ArrowLeft, Save, Loader2, Filter, X, Download } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useTriageTypes } from '@/lib/hooks'
 import StateBadge from '@/components/StateBadge'
@@ -113,6 +113,31 @@ export default function CycleDetail() {
     pass: Math.round((cycle.passed / (cycle.total_tests || 1)) * 100),
   } : null
 
+  function downloadCsv() {
+    const headers = ['#', 'Module', 'Test Title', 'Full Title', 'State', 'Duration (s)', 'Error', 'Triage Type', 'Triage Desc']
+    const rows = filtered.map(r => [
+      r.row_num ?? '',
+      r.module ?? '',
+      r.test_title ?? '',
+      r.full_title ?? '',
+      r.state ?? '',
+      r.duration_s ?? '',
+      r.error ?? '',
+      r.triage_type ?? '',
+      r.triage_desc ?? '',
+    ])
+    const csv = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${cycle?.name ?? 'cycle'}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="max-w-full">
       {/* Header */}
@@ -132,6 +157,14 @@ export default function CycleDetail() {
             )}
           </div>
         </div>
+        <button
+          onClick={downloadCsv}
+          disabled={filtered.length === 0}
+          className="flex items-center gap-2 px-3 py-2 border border-gray-200 hover:bg-gray-50 disabled:opacity-40 text-gray-600 text-sm font-medium rounded-lg transition-colors"
+        >
+          <Download size={15} />
+          Download CSV
+        </button>
       </div>
 
       {/* Filters */}

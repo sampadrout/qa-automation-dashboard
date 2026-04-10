@@ -1,12 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart, Bar, LineChart, Line, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList,
 } from 'recharts'
-import { Loader2 } from 'lucide-react'
+import { Loader2, FileDown, ChevronRight, ChevronDown } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useTriageTypes } from '@/lib/hooks'
+import { captureAndExportPDF } from '@/lib/exportPdf'
+import ReportContent from '@/components/ReportContent'
 import type { Cycle } from '@/lib/types'
 
 const TABS = ['Summary', 'New Scripts', 'Failure Matrix'] as const
@@ -80,6 +82,139 @@ function fmtDate(d: string) {
   return d
 }
 
+// ── Expandable cycle detail ───────────────────────────────────────────────────
+interface CycleRow { module: string | null; state: string | null; triage_type: string | null }
+
+function CycleExpanded({ cycleId }: { cycleId: string }) {
+  const { data: rows = [], isLoading } = useQuery<CycleRow[]>({
+    queryKey: ['cycle-expanded', cycleId],
+    queryFn: async () => {
+      const PAGE = 1000
+      const all: CycleRow[] = []
+      let from = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from('test_results')
+          .select('module, state, triage_type')
+          .eq('cycle_id', cycleId)
+          .range(from, from + PAGE - 1)
+        if (error) throw error
+        all.push(...data)
+        if (data.length < PAGE) break
+        from += PAGE
+      }
+      return all
+    },
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const moduleStats = useMemo(() => {
+    const map: Record<string, Record<string, number>> = {}
+    rows.forEach(r => {
+      const mod = r.module || '(none)'
+      if (!map[mod]) map[mod] = {}
+      const s = r.state || 'unknown'
+      map[mod][s] = (map[mod][s] || 0) + 1
+    })
+    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]))
+  }, [rows])
+
+  const { triageByModule, triageTypes } = useMemo(() => {
+    const map: Record<string, Record<string, number>> = {}
+    const types = new Set<string>()
+    rows.filter(r => r.state !== 'passed').forEach(r => {
+      const mod = r.module || '(none)'
+      const t = r.triage_type || 'Untriaged'
+      types.add(t)
+      if (!map[mod]) map[mod] = {}
+      map[mod][t] = (map[mod][t] || 0) + 1
+    })
+    const sorted = Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]))
+    const triageList = [...types].sort()
+    return { triageByModule: sorted, triageTypes: triageList }
+  }, [rows])
+
+  const states = ['passed', 'failed', 'pending']
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 px-8 py-4 text-sm text-gray-400">
+        <Loader2 size={14} className="animate-spin" /> Loading details…
+      </div>
+    )
+  }
+
+  const stateColor: Record<string, string> = { passed: 'text-green-600', failed: 'text-red-600', pending: 'text-yellow-600' }
+  const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-500 bg-white border-b border-gray-200 whitespace-nowrap'
+  const tdCls = 'px-3 py-1.5 text-xs text-gray-700 whitespace-nowrap'
+
+  return (
+    <div className="px-8 py-4 grid grid-cols-2 gap-6">
+      {/* Module × State breakdown */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Module Breakdown</p>
+        <div className="rounded-lg border border-gray-200 overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr>
+                <th className={thCls}>Module</th>
+                {states.map(s => <th key={s} className={`${thCls} capitalize`}>{s}</th>)}
+                <th className={thCls}>Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {moduleStats.map(([mod, counts], i) => {
+                const total = Object.values(counts).reduce((a, b) => a + b, 0)
+                return (
+                  <tr key={mod} className={i % 2 === 1 ? 'bg-gray-50' : 'bg-white'}>
+                    <td className={`${tdCls} font-medium text-gray-800`}>{mod}</td>
+                    {states.map(s => (
+                      <td key={s} className={`${tdCls} font-medium ${stateColor[s] ?? ''}`}>
+                        {counts[s] ?? '—'}
+                      </td>
+                    ))}
+                    <td className={`${tdCls} font-bold text-gray-800`}>{total}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Module × Triage type distribution */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Triage Distribution (failures)</p>
+        <div className="rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr>
+                <th className={thCls}>Module</th>
+                {triageTypes.map(t => <th key={t} className={thCls}>{t}</th>)}
+                <th className={thCls}>Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {triageByModule.map(([mod, counts], i) => {
+                const total = Object.values(counts).reduce((a, b) => a + b, 0)
+                return (
+                  <tr key={mod} className={i % 2 === 1 ? 'bg-gray-50' : 'bg-white'}>
+                    <td className={`${tdCls} font-medium text-gray-800`}>{mod}</td>
+                    {triageTypes.map(t => (
+                      <td key={t} className={tdCls}>{counts[t] ?? '—'}</td>
+                    ))}
+                    <td className={`${tdCls} font-bold text-gray-800`}>{total}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Tab: Summary ──────────────────────────────────────────────────────────────
 function SummaryTab() {
   const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
@@ -89,9 +224,19 @@ function SummaryTab() {
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
 
+  const [expandedCycles, setExpandedCycles] = useState<Set<string>>(new Set())
+  function toggleCycle(id: string) {
+    setExpandedCycles(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
   // Pass rate chart data
   const passRateData = useMemo(() =>
     cycles.map(c => ({
+      id: c.id,
       date: c.name,
       label: fmtDate(c.name),
       'Pass Rate (%)': c.total_tests > 0 ? Math.round((c.passed / c.total_tests) * 100 * 10) / 10 : 0,
@@ -184,31 +329,53 @@ function SummaryTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-4 py-2 w-8" />
                 {['Date', 'Total', 'Passed', 'Failed', 'Pending', 'Pass Rate'].map(h => (
                   <th key={h} className="px-4 py-2 text-left font-semibold text-gray-600">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {passRateData.map(r => (
-                <tr key={r.date} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-medium">{r.date}</td>
-                  <td className="px-4 py-2 text-gray-600">{r.Total}</td>
-                  <td className="px-4 py-2 text-green-600 font-medium">{r.Passed}</td>
-                  <td className="px-4 py-2 text-red-600 font-medium">{r.Failed}</td>
-                  <td className="px-4 py-2 text-yellow-600">{r.Pending}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex items-center gap-2">
-                      <div className="w-20 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                        <div className="h-full bg-green-500 rounded-full" style={{ width: `${r['Pass Rate (%)']}%` }} />
-                      </div>
-                      <span className={`font-semibold ${r['Pass Rate (%)'] >= 90 ? 'text-green-600' : r['Pass Rate (%)'] >= 70 ? 'text-yellow-600' : 'text-red-600'}`}>
-                        {r['Pass Rate (%)']}%
-                      </span>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {passRateData.map(r => {
+                const isExpanded = expandedCycles.has(r.id)
+                return (
+                  <>
+                    <tr
+                      key={r.date}
+                      onClick={() => toggleCycle(r.id)}
+                      className="hover:bg-blue-50 cursor-pointer select-none"
+                    >
+                      <td className="px-3 py-2 text-gray-400">
+                        {isExpanded
+                          ? <ChevronDown size={15} className="text-brand-600" />
+                          : <ChevronRight size={15} />}
+                      </td>
+                      <td className="px-4 py-2 font-medium text-gray-900">{r.date}</td>
+                      <td className="px-4 py-2 text-gray-600">{r.Total}</td>
+                      <td className="px-4 py-2 text-green-600 font-medium">{r.Passed}</td>
+                      <td className="px-4 py-2 text-red-600 font-medium">{r.Failed}</td>
+                      <td className="px-4 py-2 text-yellow-600">{r.Pending}</td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-20 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                            <div className="h-full bg-green-500 rounded-full" style={{ width: `${r['Pass Rate (%)']}%` }} />
+                          </div>
+                          <span className={`font-semibold ${r['Pass Rate (%)'] >= 90 ? 'text-green-600' : r['Pass Rate (%)'] >= 70 ? 'text-yellow-600' : 'text-red-600'}`}>
+                            {r['Pass Rate (%)']}%
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${r.date}-detail`}>
+                        <td colSpan={7} className="px-0 py-0 bg-blue-50 border-b border-blue-100">
+                          <CycleExpanded cycleId={r.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -370,6 +537,31 @@ function NewScriptsTab() {
     Object.fromEntries(modules.map((m, i) => [m, MODULE_PALETTE[i % MODULE_PALETTE.length]])),
   [modules])
 
+  // date → module → sorted list of test titles first seen on that date
+  const newTitlesByDateModule = useMemo(() => {
+    const map: Record<string, Record<string, string[]>> = {}
+    titleStats.forEach(s => {
+      if (!map[s.firstSeen]) map[s.firstSeen] = {}
+      const mod = s.module || '(none)'
+      if (!map[s.firstSeen][mod]) map[s.firstSeen][mod] = []
+      map[s.firstSeen][mod].push(s.title)
+    })
+    // Sort titles within each module
+    Object.values(map).forEach(modMap =>
+      Object.values(modMap).forEach(titles => titles.sort())
+    )
+    return map
+  }, [titleStats])
+
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set())
+  function toggleDate(date: string) {
+    setExpandedDates(prev => {
+      const next = new Set(prev)
+      next.has(date) ? next.delete(date) : next.add(date)
+      return next
+    })
+  }
+
   if (lc || lt) return <Spinner />
 
   return (
@@ -405,6 +597,7 @@ function NewScriptsTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-3 py-2 w-8" />
                 <th className="px-3 py-2 text-left font-semibold text-gray-600 whitespace-nowrap">Date</th>
                 <th className="px-3 py-2 text-center font-semibold text-gray-600 whitespace-nowrap">Total New</th>
                 {modules.map(m => (
@@ -419,21 +612,62 @@ function NewScriptsTab() {
               {datesSorted.slice(1).map(date => {
                 const mods = newByModule[date] ?? {}
                 const total = Object.values(mods).reduce((a, b) => a + b, 0)
+                const isExpanded = expandedDates.has(date)
+                const titlesForDate = newTitlesByDateModule[date] ?? {}
+                const colSpan = 3 + modules.length
                 return (
-                  <tr key={date} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{date}</td>
-                    <td className="px-3 py-2 text-center font-semibold text-blue-600">{total || '—'}</td>
-                    {modules.map(m => (
-                      <td key={m} className="px-3 py-2 text-center">
-                        {mods[m] ? (
-                          <span className="inline-block px-2 py-0.5 rounded text-xs font-medium"
-                            style={{ background: moduleColors[m] + '22', color: moduleColors[m] }}>
-                            {mods[m]}
-                          </span>
-                        ) : '—'}
+                  <>
+                    <tr
+                      key={date}
+                      onClick={() => total > 0 && toggleDate(date)}
+                      className={`${total > 0 ? 'cursor-pointer hover:bg-blue-50' : 'hover:bg-gray-50'} select-none`}
+                    >
+                      <td className="px-3 py-2 text-gray-400">
+                        {total > 0 && (isExpanded
+                          ? <ChevronDown size={15} className="text-brand-600" />
+                          : <ChevronRight size={15} />)}
                       </td>
-                    ))}
-                  </tr>
+                      <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{date}</td>
+                      <td className="px-3 py-2 text-center font-semibold text-blue-600">{total || '—'}</td>
+                      {modules.map(m => (
+                        <td key={m} className="px-3 py-2 text-center">
+                          {mods[m] ? (
+                            <span className="inline-block px-2 py-0.5 rounded text-xs font-medium"
+                              style={{ background: moduleColors[m] + '22', color: moduleColors[m] }}>
+                              {mods[m]}
+                            </span>
+                          ) : '—'}
+                        </td>
+                      ))}
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${date}-detail`}>
+                        <td colSpan={colSpan} className="px-0 py-0 bg-blue-50 border-b border-blue-100">
+                          <div className="px-8 py-4 grid grid-cols-2 gap-4 lg:grid-cols-3">
+                            {Object.entries(titlesForDate).sort((a, b) => a[0].localeCompare(b[0])).map(([mod, titles]) => (
+                              <div key={mod}>
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span
+                                    className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                    style={{ background: moduleColors[mod] ?? '#cbd5e1' }}
+                                  />
+                                  <span className="text-xs font-semibold text-gray-700">{mod}</span>
+                                  <span className="text-xs text-gray-400 font-medium">({titles.length})</span>
+                                </div>
+                                <ul className="space-y-0.5 max-h-48 overflow-y-auto">
+                                  {titles.map(t => (
+                                    <li key={t} className="text-xs text-gray-600 truncate pl-4" title={t}>
+                                      · {t}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 )
               })}
             </tbody>
@@ -625,12 +859,60 @@ function Spinner() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Analytics() {
   const [activeTab, setActiveTab] = useState<Tab>('Summary')
+  const [exporting, setExporting] = useState(false)
+  const reportRef = useRef<HTMLDivElement>(null)
+  const { colors: triageColors } = useTriageTypes()
+
+  // Pre-fetch all data so ReportContent off-screen component is always populated
+  const { data: reportCycles = [] } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
+  const { data: reportFailed = [] } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
+  const { data: reportTitles = [] } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 0 })
+
+  async function handleExportPDF() {
+    if (!reportRef.current) return
+    setExporting(true)
+    const el = reportRef.current
+    el.style.left = '0'
+    el.style.opacity = '1'
+    try {
+      await new Promise(r => setTimeout(r, 400)) // let recharts fully render charts
+      await captureAndExportPDF(el, `qa-report-${new Date().toISOString().slice(0, 10)}.pdf`)
+    } finally {
+      el.style.left = '-9999px'
+      el.style.opacity = '0'
+      setExporting(false)
+    }
+  }
 
   return (
+    <>
+      {/* Off-screen report for PDF capture */}
+      <div
+        ref={reportRef}
+        style={{ position: 'fixed', left: '-9999px', top: 0, opacity: 0, zIndex: -1, pointerEvents: 'none' }}
+      >
+        <ReportContent
+          cycles={reportCycles}
+          failed={reportFailed}
+          allTitles={reportTitles}
+          triageColors={triageColors}
+        />
+      </div>
+
     <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
-        <p className="text-sm text-gray-500 mt-1">Trends across all test cycles</p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
+          <p className="text-sm text-gray-500 mt-1">Trends across all test cycles</p>
+        </div>
+        <button
+          onClick={handleExportPDF}
+          disabled={exporting}
+          className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {exporting ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />}
+          Export PDF
+        </button>
       </div>
 
       {/* Tabs */}
@@ -654,5 +936,6 @@ export default function Analytics() {
       {activeTab === 'New Scripts'    && <NewScriptsTab />}
       {activeTab === 'Failure Matrix'  && <FailureMatrixTab />}
     </div>
+    </>
   )
 }
