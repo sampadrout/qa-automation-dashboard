@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useState, useRef, useEffect } from 'react'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Save, Loader2, Filter, X, Download } from 'lucide-react'
+import { ArrowLeft, Save, Loader2, Filter, X, Download, Pencil, Trash2, Check } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useTriageTypes } from '@/lib/hooks'
 import StateBadge from '@/components/StateBadge'
@@ -17,6 +17,7 @@ type Edits = Record<string, TriageEdit>
 export default function CycleDetail() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [moduleFilter, setModuleFilter] = useState('')
   const [stateFilter, setStateFilter] = useState('')
@@ -24,6 +25,16 @@ export default function CycleDetail() {
   const [edits, setEdits] = useState<Edits>({})
   const [saving, setSaving] = useState<string | null>(null)
   const { types: triageTypes, colors: triageColors } = useTriageTypes()
+
+  const [renaming, setRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameSaving, setRenameSaving] = useState(false)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    if (renaming) renameInputRef.current?.focus()
+  }, [renaming])
 
   const { data: cycle } = useQuery<Cycle>({
     queryKey: ['cycle', id],
@@ -113,6 +124,44 @@ export default function CycleDetail() {
     pass: Math.round((cycle.passed / (cycle.total_tests || 1)) * 100),
   } : null
 
+  function startRename() {
+    setRenameValue(cycle?.name ?? '')
+    setRenaming(true)
+  }
+
+  async function handleRename() {
+    const trimmed = renameValue.trim()
+    if (!trimmed || trimmed === cycle?.name) { setRenaming(false); return }
+    setRenameSaving(true)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).from('cycles').update({ name: trimmed }).eq('id', id!)
+      if (error) throw error
+      queryClient.invalidateQueries({ queryKey: ['cycle', id] })
+      queryClient.invalidateQueries({ queryKey: ['cycles'] })
+      setRenaming(false)
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Rename failed')
+    } finally {
+      setRenameSaving(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!window.confirm(`Delete cycle "${cycle?.name}"? This will also remove all its test results.`)) return
+    setDeleting(true)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).from('cycles').delete().eq('id', id!)
+      if (error) throw error
+      queryClient.invalidateQueries({ queryKey: ['cycles'] })
+      navigate('/')
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Delete failed')
+      setDeleting(false)
+    }
+  }
+
   function downloadCsv() {
     const headers = ['#', 'Module', 'Test Title', 'Full Title', 'State', 'Duration (s)', 'Error', 'Triage Type', 'Triage Desc']
     const rows = filtered.map(r => [
@@ -147,7 +196,34 @@ export default function CycleDetail() {
             <ArrowLeft size={18} />
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{cycle?.name ?? '…'}</h1>
+            <div className="flex items-center gap-2">
+              {renaming ? (
+                <>
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleRename(); if (e.key === 'Escape') setRenaming(false) }}
+                    className="text-2xl font-bold text-gray-900 border-b-2 border-brand-500 bg-transparent outline-none w-auto min-w-0"
+                  />
+                  <button onClick={handleRename} disabled={renameSaving} className="p-1 rounded text-green-600 hover:bg-green-50 disabled:opacity-50 transition-colors" title="Save name">
+                    {renameSaving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                  </button>
+                  <button onClick={() => setRenaming(false)} className="p-1 rounded text-gray-400 hover:bg-gray-100 transition-colors" title="Cancel">
+                    <X size={16} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h1 className="text-2xl font-bold text-gray-900">{cycle?.name ?? '…'}</h1>
+                  {cycle && (
+                    <button onClick={startRename} className="p-1 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-colors" title="Rename cycle">
+                      <Pencil size={15} />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
             {cycle && (
               <p className="text-sm text-gray-500 mt-0.5">
                 {cycle.total_tests} tests · {cycle.passed} passed · {cycle.failed} failed
@@ -157,14 +233,25 @@ export default function CycleDetail() {
             )}
           </div>
         </div>
-        <button
-          onClick={downloadCsv}
-          disabled={filtered.length === 0}
-          className="flex items-center gap-2 px-3 py-2 border border-gray-200 hover:bg-gray-50 disabled:opacity-40 text-gray-600 text-sm font-medium rounded-lg transition-colors"
-        >
-          <Download size={15} />
-          Download CSV
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={downloadCsv}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 px-3 py-2 border border-gray-200 hover:bg-gray-50 disabled:opacity-40 text-gray-600 text-sm font-medium rounded-lg transition-colors"
+          >
+            <Download size={15} />
+            Download CSV
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="flex items-center gap-2 px-3 py-2 border border-red-200 hover:bg-red-50 disabled:opacity-50 text-red-600 text-sm font-medium rounded-lg transition-colors"
+            title="Delete cycle"
+          >
+            {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+            Delete
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
