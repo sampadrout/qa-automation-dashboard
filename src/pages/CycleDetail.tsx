@@ -277,6 +277,7 @@ export default function CycleDetail() {
           <option value="passed">Passed</option>
           <option value="failed">Failed</option>
           <option value="pending">Pending</option>
+          <option value="skipped">Skipped</option>
         </select>
         <select
           value={triageFilter}

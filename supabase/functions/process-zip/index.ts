@@ -26,32 +26,41 @@ function processIndexJson(content: string, moduleName: string): TestRow[] {
   const data = JSON.parse(content)
   const rows: TestRow[] = []
 
+  function pushTests(tests: Record<string, unknown>[], currentFile: string, suiteTitle: string) {
+    for (const test of tests) {
+      const duration = (test.duration as number) ?? 0
+      const err = (test.err as Record<string, string>) ?? {}
+      rows.push({
+        row_num: 0,
+        module: moduleName,
+        file: currentFile,
+        suites: suiteTitle,
+        test_title: (test.title as string) ?? '',
+        full_title: (test.fullTitle as string) ?? '',
+        state: (test.state as string) ?? '',
+        duration_s: Math.round((duration / 1000) * 100) / 100,
+        error: err.message ?? '',
+        triage_type: '',
+        triage_desc: '',
+      })
+    }
+  }
+
   function extractTests(suites: unknown[], currentFile: string, currentSuiteTitle: string) {
     for (const suite of suites as Record<string, unknown>[]) {
       const suiteTitle = (suite.title as string) || currentSuiteTitle
-      for (const test of (suite.tests ?? []) as Record<string, unknown>[]) {
-        const duration = (test.duration as number) ?? 0
-        const err = (test.err as Record<string, string>) ?? {}
-        rows.push({
-          row_num: 0,
-          module: moduleName,
-          file: currentFile,
-          suites: suiteTitle,
-          test_title: (test.title as string) ?? '',
-          full_title: (test.fullTitle as string) ?? '',
-          state: (test.state as string) ?? '',
-          duration_s: Math.round((duration / 1000) * 100) / 100,
-          error: err.message ?? '',
-          triage_type: '',
-          triage_desc: '',
-        })
-      }
+      pushTests((suite.tests ?? []) as Record<string, unknown>[], currentFile, suiteTitle)
       extractTests((suite.suites ?? []) as unknown[], currentFile, suiteTitle)
     }
   }
 
   for (const result of (data.results ?? []) as Record<string, unknown>[]) {
-    extractTests((result.suites ?? []) as unknown[], (result.file as string) ?? '', '')
+    const file = (result.file as string) ?? ''
+    const resultTitle = (result.title as string) ?? ''
+    // Process tests sitting directly on the result (rootEmpty=false case)
+    pushTests((result.tests ?? []) as Record<string, unknown>[], file, resultTitle)
+    // Process nested suites
+    extractTests((result.suites ?? []) as unknown[], file, resultTitle)
   }
   return rows
 }
@@ -87,7 +96,7 @@ function parseCsv(text: string): TestRow[] {
     const get = (name: string) => (cells[idx(name)] ?? '').trim()
     const rowNum = parseInt(get('Row #')) || i
     const state = get('State').toLowerCase()
-    if (!['passed', 'failed', 'pending'].includes(state)) continue
+    if (!['passed', 'failed', 'pending', 'skipped'].includes(state)) continue
 
     rows.push({
       row_num: rowNum,

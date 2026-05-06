@@ -37,7 +37,7 @@ create table public.test_results (
   suites       text,
   test_title   text,
   full_title   text,
-  state        text        check (state in ('passed', 'failed', 'pending')),
+  state        text        check (state in ('passed', 'failed', 'pending', 'skipped')),
   duration_s   numeric,
   error        text,
   triage_type  text,

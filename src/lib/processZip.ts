@@ -19,32 +19,41 @@ function processIndexJson(content: string, moduleName: string): ParsedRow[] {
   const data = JSON.parse(content)
   const rows: ParsedRow[] = []
 
+  function pushTests(tests: Record<string, unknown>[], currentFile: string, suiteTitle: string) {
+    for (const test of tests) {
+      const duration = (test.duration as number) ?? 0
+      const err = (test.err as Record<string, string>) ?? {}
+      rows.push({
+        row_num: null,
+        module: moduleName,
+        file: currentFile,
+        suites: suiteTitle,
+        test_title: (test.title as string) ?? null,
+        full_title: (test.fullTitle as string) ?? null,
+        state: (test.state as string) ?? '',
+        duration_s: Math.round((duration / 1000) * 100) / 100,
+        error: err.message ?? null,
+        triage_type: null,
+        triage_desc: null,
+      })
+    }
+  }
+
   function extract(suites: Record<string, unknown>[], currentFile: string, suiteTitle: string) {
     for (const suite of suites) {
       const title = (suite.title as string) || suiteTitle
-      for (const test of (suite.tests ?? []) as Record<string, unknown>[]) {
-        const duration = (test.duration as number) ?? 0
-        const err = (test.err as Record<string, string>) ?? {}
-        rows.push({
-          row_num: null,
-          module: moduleName,
-          file: currentFile,
-          suites: title,
-          test_title: (test.title as string) ?? null,
-          full_title: (test.fullTitle as string) ?? null,
-          state: (test.state as string) ?? '',
-          duration_s: Math.round((duration / 1000) * 100) / 100,
-          error: err.message ?? null,
-          triage_type: null,
-          triage_desc: null,
-        })
-      }
+      pushTests((suite.tests ?? []) as Record<string, unknown>[], currentFile, title)
       extract((suite.suites ?? []) as Record<string, unknown>[], currentFile, title)
     }
   }
 
   for (const result of (data.results ?? []) as Record<string, unknown>[]) {
-    extract((result.suites ?? []) as Record<string, unknown>[], (result.file as string) ?? '', '')
+    const file = (result.file as string) ?? ''
+    const resultTitle = (result.title as string) ?? ''
+    // Process tests sitting directly on the result (rootEmpty=false case)
+    pushTests((result.tests ?? []) as Record<string, unknown>[], file, resultTitle)
+    // Process nested suites
+    extract((result.suites ?? []) as Record<string, unknown>[], file, resultTitle)
   }
   return rows
 }
@@ -62,7 +71,7 @@ function parseCsv(text: string): ParsedRow[] {
 
   const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim())
   const idx = (name: string) => headers.indexOf(name)
-  const valid = new Set(['passed', 'failed', 'pending'])
+  const valid = new Set(['passed', 'failed', 'pending', 'skipped'])
   const rows: ParsedRow[] = []
 
   for (let i = 1; i < lines.length; i++) {
@@ -125,7 +134,7 @@ export async function extractZip(file: File): Promise<{ cycleName: string; rows:
     throw new Error('No CSV or index.json files found inside the ZIP')
   }
 
-  const valid = new Set(['passed', 'failed', 'pending'])
+  const valid = new Set(['passed', 'failed', 'pending', 'skipped'])
   rows = rows.filter(r => valid.has(r.state))
 
   if (rows.length === 0) throw new Error('No valid test rows found in ZIP')

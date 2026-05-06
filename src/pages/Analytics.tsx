@@ -134,7 +134,7 @@ function CycleExpanded({ cycleId }: { cycleId: string }) {
     return { triageByModule: sorted, triageTypes: triageList }
   }, [rows])
 
-  const states = ['passed', 'failed', 'pending']
+  const states = ['passed', 'failed', 'pending', 'skipped']
 
   if (isLoading) {
     return (
@@ -144,7 +144,7 @@ function CycleExpanded({ cycleId }: { cycleId: string }) {
     )
   }
 
-  const stateColor: Record<string, string> = { passed: 'text-green-600', failed: 'text-red-600', pending: 'text-yellow-600' }
+  const stateColor: Record<string, string> = { passed: 'text-green-600', failed: 'text-red-600', pending: 'text-yellow-600', skipped: 'text-gray-500' }
   const thCls = 'px-3 py-2 text-left text-xs font-semibold text-gray-500 bg-white border-b border-gray-200 whitespace-nowrap'
   const tdCls = 'px-3 py-1.5 text-xs text-gray-700 whitespace-nowrap'
 
