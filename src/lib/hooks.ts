@@ -46,6 +46,31 @@ export function useTriageTypes() {
   return { types, colors, rows: data }
 }
 
+export interface SprintRow {
+  id: string
+  name: string
+  start_date: string
+  end_date: string
+  sort_order: number
+}
+
+export function useSprints() {
+  const { data = [], isLoading } = useQuery<SprintRow[]>({
+    queryKey: ['sprints'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('sprints')
+        .select('*')
+        .order('sort_order')
+        .order('start_date', { ascending: false })
+      if (error) throw error
+      return data
+    },
+    staleTime: 60_000,
+  })
+  return { sprints: data, isLoading }
+}
+
 export function useIsAdmin() {
   const { data = false } = useQuery<boolean>({
     queryKey: ['is-admin'],

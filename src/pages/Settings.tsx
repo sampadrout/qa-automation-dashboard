@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Check, X, Loader2, ShieldAlert, GripVertical } from 'lucide-react'
+import { Plus, Pencil, Trash2, Check, X, Loader2, ShieldAlert, GripVertical, CalendarRange } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { useTriageTypes, useIsAdmin, type TriageTypeRow } from '@/lib/hooks'
+import { useTriageTypes, useIsAdmin, useSprints, type TriageTypeRow, type SprintRow } from '@/lib/hooks'
 
 const COLOR_PALETTE = [
   '#9ca3af', '#fbbf24', '#f59e0b', '#ef4444', '#dc2626',
@@ -22,6 +22,183 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (c: string)
           style={{ background: c }}
         />
       ))}
+    </div>
+  )
+}
+
+function SprintConfig() {
+  const { sprints } = useSprints()
+  const queryClient = useQueryClient()
+
+  const [adding, setAdding]       = useState(false)
+  const [newName, setNewName]     = useState('')
+  const [newStart, setNewStart]   = useState('')
+  const [newEnd, setNewEnd]       = useState('')
+  const [editId, setEditId]       = useState<string | null>(null)
+  const [editName, setEditName]   = useState('')
+  const [editStart, setEditStart] = useState('')
+  const [editEnd, setEditEnd]     = useState('')
+  const [saving, setSaving]       = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [error, setError]         = useState<string | null>(null)
+
+  function invalidate() { queryClient.invalidateQueries({ queryKey: ['sprints'] }) }
+
+  async function handleAdd() {
+    if (!newName.trim() || !newStart || !newEnd) return
+    setSaving(true); setError(null)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).from('sprints').insert({
+        name: newName.trim(), start_date: newStart, end_date: newEnd, sort_order: sprints.length,
+      })
+      if (error) throw error
+      setAdding(false); setNewName(''); setNewStart(''); setNewEnd('')
+      invalidate()
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Failed to add') }
+    finally { setSaving(false) }
+  }
+
+  function startEdit(s: SprintRow) {
+    setEditId(s.id); setEditName(s.name); setEditStart(s.start_date); setEditEnd(s.end_date); setError(null)
+  }
+
+  async function handleSaveEdit() {
+    if (!editName.trim() || !editStart || !editEnd || !editId) return
+    setSaving(true); setError(null)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).from('sprints').update({
+        name: editName.trim(), start_date: editStart, end_date: editEnd,
+      }).eq('id', editId)
+      if (error) throw error
+      setEditId(null); invalidate()
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Failed to save') }
+    finally { setSaving(false) }
+  }
+
+  async function handleDelete(s: SprintRow) {
+    if (!confirm(`Delete sprint "${s.name}"?`)) return
+    setDeletingId(s.id); setError(null)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).from('sprints').delete().eq('id', s.id)
+      if (error) throw error
+      invalidate()
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Failed to delete') }
+    finally { setDeletingId(null) }
+  }
+
+  const inputCls = 'text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-500'
+
+  return (
+    <div className="mt-10">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <CalendarRange size={18} className="text-brand-500" />
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Sprint Configuration</h2>
+            <p className="text-sm text-gray-500">Define named sprints with start and end dates for filtering analytics</p>
+          </div>
+        </div>
+        {!adding && (
+          <button
+            onClick={() => { setAdding(true); setError(null) }}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Plus size={16} /> Add Sprint
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{error}</div>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100">
+        {adding && (
+          <div className="px-5 py-4 bg-blue-50 border-b border-blue-100">
+            <p className="text-sm font-medium text-gray-700 mb-3">New sprint</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <input autoFocus type="text" value={newName} onChange={e => setNewName(e.target.value)}
+                placeholder="Sprint name…" className={inputCls} />
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 whitespace-nowrap">From</label>
+                <input type="date" value={newStart} onChange={e => setNewStart(e.target.value)} className={inputCls + ' w-full'} />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 whitespace-nowrap">To</label>
+                <input type="date" value={newEnd} min={newStart || undefined} onChange={e => setNewEnd(e.target.value)} className={inputCls + ' w-full'} />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={handleAdd} disabled={saving || !newName.trim() || !newStart || !newEnd}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm rounded-lg font-medium transition-colors">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Add
+              </button>
+              <button onClick={() => { setAdding(false); setNewName(''); setNewStart(''); setNewEnd('') }}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">
+                <X size={14} /> Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {sprints.map(s => (
+          <div key={s.id} className="px-5 py-3.5">
+            {editId === s.id ? (
+              <div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <input autoFocus type="text" value={editName} onChange={e => setEditName(e.target.value)} className={inputCls} />
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-400 whitespace-nowrap">From</label>
+                    <input type="date" value={editStart} onChange={e => setEditStart(e.target.value)} className={inputCls + ' w-full'} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-400 whitespace-nowrap">To</label>
+                    <input type="date" value={editEnd} min={editStart || undefined} onChange={e => setEditEnd(e.target.value)} className={inputCls + ' w-full'} />
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button onClick={handleSaveEdit} disabled={saving || !editName.trim() || !editStart || !editEnd}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-sm rounded-lg font-medium transition-colors">
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
+                  </button>
+                  <button onClick={() => setEditId(null)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">
+                    <X size={14} /> Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <GripVertical size={14} className="text-gray-300 flex-shrink-0" />
+                <CalendarRange size={14} className="text-brand-400 flex-shrink-0" />
+                <span className="font-medium text-sm text-gray-800">{s.name}</span>
+                <span className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+                  {s.start_date} → {s.end_date}
+                </span>
+                <span className="ml-auto flex items-center gap-2">
+                  <button onClick={() => startEdit(s)}
+                    className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors" title="Edit">
+                    <Pencil size={14} />
+                  </button>
+                  <button onClick={() => handleDelete(s)} disabled={deletingId === s.id}
+                    className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors" title="Delete">
+                    {deletingId === s.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  </button>
+                </span>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {sprints.length === 0 && !adding && (
+          <div className="px-5 py-10 text-center text-gray-400 text-sm">
+            No sprints yet. Click <strong>Add Sprint</strong> to create one.
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -263,6 +440,8 @@ export default function Settings() {
           INSERT INTO admin_users (user_id) VALUES ('&lt;user-id&gt;');
         </code>
       </p>
+
+      <SprintConfig />
     </div>
   )
 }

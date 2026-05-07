@@ -4,9 +4,9 @@ import {
   BarChart, Bar, LineChart, Line, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList,
 } from 'recharts'
-import { Loader2, FileDown, ChevronRight, ChevronDown } from 'lucide-react'
+import { Loader2, FileDown, ChevronRight, ChevronDown, CalendarRange } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { useTriageTypes } from '@/lib/hooks'
+import { useTriageTypes, useSprints } from '@/lib/hooks'
 import { captureAndExportPDF } from '@/lib/exportPdf'
 import ReportContent from '@/components/ReportContent'
 import type { Cycle } from '@/lib/types'
@@ -80,6 +80,24 @@ function fmtDate(d: string) {
     if (m >= 1 && m <= 12) return `${months[m - 1]} ${parseInt(match[3])}`
   }
   return d
+}
+
+// Normalise a cycle name to a YYYY-MM-DD string for date comparisons
+function cycleNameToDate(name: string): string {
+  if (/^\d{4}-\d{2}-\d{2}/.test(name)) return name.slice(0, 10)
+  const m = name.match(/^(\d{4})(\d{2})(\d{2})/)
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`
+  return name
+}
+
+function filterCyclesBySprint<T extends { name: string }>(cycles: T[], start: string, end: string): T[] {
+  if (!start && !end) return cycles
+  return cycles.filter(c => {
+    const d = cycleNameToDate(c.name)
+    if (start && d < start) return false
+    if (end   && d > end)   return false
+    return true
+  })
 }
 
 // ── Expandable cycle detail ───────────────────────────────────────────────────
@@ -216,13 +234,17 @@ function CycleExpanded({ cycleId }: { cycleId: string }) {
 }
 
 // ── Tab: Summary ──────────────────────────────────────────────────────────────
-function SummaryTab() {
-  const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
+function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd: string }) {
+  const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: failed = [], isLoading: lf } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
+  const cycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
   const { colors: CHART_COLORS } = useTriageTypes()
 
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
+
+  const sprintCycleIds = useMemo(() => new Set(cycles.map(c => c.id)), [cycles])
+  const filteredFailed = useMemo(() => failed.filter(r => sprintCycleIds.has(r.cycle_id)), [failed, sprintCycleIds])
 
   const [expandedCycles, setExpandedCycles] = useState<Set<string>>(new Set())
   function toggleCycle(id: string) {
@@ -249,12 +271,12 @@ function SummaryTab() {
   // All failures regardless of module (for chart)
   const allTriageTypes = useMemo(() => {
     const counts: Record<string, number> = {}
-    failed.forEach(r => {
+    filteredFailed.forEach(r => {
       const t = r.triage_type || 'Untriaged'
       counts[t] = (counts[t] || 0) + 1
     })
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([t]) => t)
-  }, [failed])
+  }, [filteredFailed])
 
   // Chart data: stacked bar (one bar per date)
   const chartData = useMemo(() => {
@@ -264,7 +286,7 @@ function SummaryTab() {
       byDate[c.name] = {}
       trueTotal[c.name] = c.failed + c.pending
     })
-    failed.forEach(r => {
+    filteredFailed.forEach(r => {
       const date = cycleMap[r.cycle_id]
       if (!date) return
       const t = r.triage_type || 'Untriaged'
@@ -275,13 +297,13 @@ function SummaryTab() {
       _total: trueTotal[date] ?? Object.values(counts).reduce((a, b) => a + b, 0),
       _zero: 0,
     }))
-  }, [failed, cycles, cycleMap])
+  }, [filteredFailed, cycles, cycleMap])
 
   // Table: one row per date, triage type counts across all modules
   const tableRows = useMemo(() => {
     const byDate: Record<string, Record<string, number>> = {}
     cycles.forEach(c => { byDate[c.name] = {} })
-    failed.forEach(r => {
+    filteredFailed.forEach(r => {
       const date = cycleMap[r.cycle_id]
       if (!date) return
       const t = r.triage_type || 'Untriaged'
@@ -292,7 +314,7 @@ function SummaryTab() {
       total: Object.values(counts).reduce((a, b) => a + b, 0),
       counts,
     }))
-  }, [failed, cycles, cycleMap])
+  }, [filteredFailed, cycles, cycleMap])
 
   if (lc || lf) return <Spinner />
 
@@ -336,7 +358,7 @@ function SummaryTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {passRateData.map(r => {
+              {passRateData.slice().reverse().map(r => {
                 const isExpanded = expandedCycles.has(r.id)
                 return (
                   <>
@@ -444,7 +466,7 @@ function SummaryTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {tableRows.map(({ date, total, counts }) => (
+              {tableRows.slice().reverse().map(({ date, total, counts }) => (
                 <tr key={date} className="hover:bg-gray-50">
                   <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{date}</td>
                   <td className="px-3 py-2 text-center font-semibold text-red-600">{total || '—'}</td>
@@ -471,9 +493,10 @@ function SummaryTab() {
 }
 
 // ── Tab: New Scripts ───────────────────────────────────────────────────────────
-function NewScriptsTab() {
-  const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
+function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd: string }) {
+  const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: allTitles = [], isLoading: lt } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 0 })
+  const cycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
 
@@ -680,9 +703,10 @@ function NewScriptsTab() {
 }
 
 // ── Tab: Failure Matrix ────────────────────────────────────────────────────────
-function FailureMatrixTab() {
-  const { data: cycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
+function FailureMatrixTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd: string }) {
+  const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: failed = [], isLoading: lf } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
+  const cycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
   const { colors: CHART_COLORS } = useTriageTypes()
   const [activeModule, setActiveModule] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -690,10 +714,13 @@ function FailureMatrixTab() {
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
 
+  const sprintCycleIds = useMemo(() => new Set(cycles.map(c => c.id)), [cycles])
+  const filteredFailed = useMemo(() => failed.filter(r => sprintCycleIds.has(r.cycle_id)), [failed, sprintCycleIds])
+
   const datesSorted = useMemo(() => cycles.map(c => c.name), [cycles])
 
   const modules = useMemo(() =>
-    [...new Set(failed.map(r => r.module).filter(Boolean))].sort() as string[], [failed])
+    [...new Set(filteredFailed.map(r => r.module).filter(Boolean))].sort() as string[], [filteredFailed])
 
   const selectedModule = activeModule ?? modules[0] ?? ''
 
@@ -701,7 +728,7 @@ function FailureMatrixTab() {
   const { titles } = useMemo(() => {
     const map: Record<string, Record<string, string>> = {}
     const errorMap: Record<string, string | null> = {}
-    failed
+    filteredFailed
       .filter(r => r.module === selectedModule && r.test_title)
       .forEach(r => {
         const date = cycleMap[r.cycle_id]
@@ -856,9 +883,46 @@ function Spinner() {
   )
 }
 
+// ── Sprint selector bar ───────────────────────────────────────────────────────
+function SprintSelector({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const { sprints } = useSprints()
+  const selected = sprints.find(s => s.id === value)
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm">
+      <div className="flex items-center gap-1.5 text-sm font-medium text-gray-600 whitespace-nowrap">
+        <CalendarRange size={15} className="text-brand-500" />
+        Sprint
+      </div>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 min-w-[200px]"
+      >
+        <option value="">All time</option>
+        {sprints.map(s => (
+          <option key={s.id} value={s.id}>{s.name}</option>
+        ))}
+      </select>
+      {selected && (
+        <span className="text-xs text-brand-600 font-medium bg-brand-50 px-2 py-0.5 rounded-full border border-brand-100 whitespace-nowrap">
+          {selected.start_date} → {selected.end_date}
+        </span>
+      )}
+      {sprints.length === 0 && (
+        <span className="text-xs text-gray-400">No sprints configured — add them in <strong>Settings</strong>.</span>
+      )}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Analytics() {
   const [activeTab, setActiveTab] = useState<Tab>('Summary')
+  const [selectedSprintId, setSelectedSprintId] = useState('')
+  const { sprints } = useSprints()
+  const selectedSprint = sprints.find(s => s.id === selectedSprintId)
+  const sprintStart = selectedSprint?.start_date ?? ''
+  const sprintEnd   = selectedSprint?.end_date   ?? ''
   const [exporting, setExporting] = useState(false)
   const reportRef = useRef<HTMLDivElement>(null)
   const { colors: triageColors } = useTriageTypes()
@@ -915,6 +979,11 @@ export default function Analytics() {
         </button>
       </div>
 
+      {/* Sprint selector */}
+      <div className="mb-5">
+        <SprintSelector value={selectedSprintId} onChange={setSelectedSprintId} />
+      </div>
+
       {/* Tabs */}
       <div className="flex gap-1 mb-6 border-b border-gray-200">
         {TABS.map(tab => (
@@ -932,9 +1001,9 @@ export default function Analytics() {
         ))}
       </div>
 
-      {activeTab === 'Summary'        && <SummaryTab />}
-      {activeTab === 'New Scripts'    && <NewScriptsTab />}
-      {activeTab === 'Failure Matrix'  && <FailureMatrixTab />}
+      {activeTab === 'Summary'        && <SummaryTab        sprintStart={sprintStart} sprintEnd={sprintEnd} />}
+      {activeTab === 'New Scripts'    && <NewScriptsTab     sprintStart={sprintStart} sprintEnd={sprintEnd} />}
+      {activeTab === 'Failure Matrix' && <FailureMatrixTab  sprintStart={sprintStart} sprintEnd={sprintEnd} />}
     </div>
     </>
   )
