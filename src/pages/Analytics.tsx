@@ -502,8 +502,10 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
 
   const datesSorted = useMemo(() => cycles.map(c => c.name), [cycles])
 
+  // Derive modules from the normalised keys used in newByModule ('(none)' for nulls)
+  // so that <Bar> dataKeys match the chartData keys exactly
   const modules = useMemo(() =>
-    [...new Set(allTitles.map(r => r.module).filter(Boolean))].sort() as string[], [allTitles])
+    [...new Set(titleStats.map(s => s.module || '(none)'))].sort(), [titleStats])
 
   // For each test_title: first seen date, last seen date, run count, module
   const titleStats = useMemo(() => {

@@ -17,11 +17,13 @@ interface Props {
 export const PAGE_W = 1080
 export const PAGE_H = 720
 const CHART_W = 1010
-const TABLE_ROWS = 5         // max rows shown per table
-const TABLE_COLS = 8         // max triage/module columns shown
+const TABLE_ROWS = 5          // max rows shown per table
+const TABLE_COLS_TRIAGE = 6   // triage type names are long — keep fewer columns
+const TABLE_COLS_MODULE  = 9  // module names are short — fit more columns
 const MODULE_PALETTE = ['#4f6ef7','#22c55e','#f97316','#a855f7','#ec4899','#14b8a6','#f59e0b','#64748b','#ef4444','#06b6d4']
 
 function pct(n: number, total: number) { return total > 0 ? Math.round((n / total) * 100) : 0 }
+function trunc(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + '…' : s }
 
 function fmtDate(d: string) {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -47,18 +49,32 @@ const thS: React.CSSProperties = {
   background: '#f8fafc', borderBottom: '2px solid #e2e8f0',
   whiteSpace: 'nowrap',
 }
+// Applied to variable-width triage/module columns — maxWidth prevents page overflow;
+// text truncation handled in JS (DotLabel maxChars) since html2canvas ignores text-overflow
+const thColS: React.CSSProperties = {
+  ...thS, maxWidth: 110, whiteSpace: 'nowrap',
+}
 const tdS: React.CSSProperties = {
   padding: '5px 10px', fontSize: 10, color: '#374151',
   borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap',
 }
 
-// Dot + label in a flex row — fixes vertical alignment in all browsers & html2canvas
-function DotLabel({ color, label }: { color: string; label: string }) {
+// Dot + label — pure inline-block flow; avoids flex-in-table-cell which html2canvas misrenders
+function DotLabel({ color, label, maxChars = 16 }: { color: string; label: string; maxChars?: number }) {
+  const text = label.length > maxChars ? label.slice(0, maxChars - 1) + '…' : label
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-      <span>{label}</span>
-    </div>
+    <span style={{ display: 'inline-block', whiteSpace: 'nowrap' }}>
+      <span style={{
+        display: 'inline-block',
+        width: 8, height: 8,
+        borderRadius: 4,          // fixed px — '50%' can misrender in html2canvas
+        background: color,
+        verticalAlign: 'middle',
+        marginRight: 5,
+        position: 'relative', top: -1,
+      }} />
+      <span style={{ verticalAlign: 'middle' }}>{text}</span>
+    </span>
   )
 }
 
@@ -176,15 +192,22 @@ function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
                     const ofFail = failTotal > 0 ? Math.round((count / failTotal) * 100) : 0
                     return (
                       <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 168, fontSize: 9, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}>{type}</div>
+                        <div style={{ width: 168, fontSize: 9, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap', flexShrink: 0 }}>{trunc(type, 24)}</div>
                         <div style={{ flex: 1, height: 16, background: '#f1f5f9', borderRadius: 4, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${barPct}%`, background: color, borderRadius: 4, display: 'flex', alignItems: 'center', paddingLeft: 5 }}>
-                            {barPct > 12 && <span style={{ fontSize: 8, fontWeight: 700, color: '#fff' }}>{count}</span>}
+                          {/* paddingTop centres 8px text in 16px bar — most reliable in html2canvas */}
+                          <div style={{
+                            height: 16, width: `${barPct}%`, background: color, borderRadius: 4,
+                            boxSizing: 'border-box', paddingTop: 3, paddingLeft: 5,
+                          }}>
+                            {barPct > 12 && (
+                              <span style={{ fontSize: 8, fontWeight: 700, color: '#fff' }}>{count}</span>
+                            )}
                           </div>
                         </div>
                         <div style={{ width: 56, display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
                           <span style={{ fontSize: 10, fontWeight: 700, color: '#1e293b' }}>{count}</span>
-                          <span style={{ fontSize: 8, fontWeight: 600, background: color + '20', color, borderRadius: 8, padding: '1px 4px' }}>{ofFail}%</span>
+                          {/* fixed height + paddingTop + border-box = reliable centering in html2canvas */}
+                          <span style={{ fontSize: 8, fontWeight: 700, color, minWidth: 26, display: 'inline-block', textAlign: 'right' }}>{ofFail}%</span>
                         </div>
                       </div>
                     )
@@ -194,7 +217,7 @@ function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
           </Card>
 
           {/* Gauge */}
-          <Card style={{ width: 196, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <Card style={{ width: 230, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <CardTitle>Run Health</CardTitle>
             <svg width={cx * 2} height={cy + 12} viewBox={`0 0 ${cx * 2} ${cy + 12}`}>
               <path d={`M ${cx-r},${cy} A ${r},${r} 0 0 1 ${cx+r},${cy}`} fill="none" stroke="#e2e8f0" strokeWidth={13} strokeLinecap="round" />
@@ -205,9 +228,9 @@ function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
             </svg>
             <div style={{ width: '100%', marginTop: 6 }}>
               {[{ label: 'Passed', val: latest.passed, color: '#16a34a' }, { label: 'Failed', val: latest.failed, color: '#dc2626' }, { label: 'Pending', val: latest.pending, color: '#d97706' }].map(({ label, val, color }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
-                  <DotLabel color={color} label={label} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color }}>{val.toLocaleString()}</span>
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #f1f5f9', minWidth: 0 }}>
+                  <DotLabel color={color} label={label} maxChars={99} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color, flexShrink: 0, paddingLeft: 8 }}>{val.toLocaleString()}</span>
                 </div>
               ))}
             </div>
@@ -249,6 +272,7 @@ function Page2({ cycles, now }: { cycles: Cycle[]; now: string }) {
             <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 10, fill: '#64748b' }} width={38} />
             <Tooltip formatter={(v: number) => [`${v}%`, 'Pass Rate']} />
             <Line type="monotone" dataKey="Pass Rate (%)" stroke="#2563eb" strokeWidth={2.5}
+              isAnimationActive={false}
               dot={{ r: 4, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 6 }}>
               <LabelList dataKey="Pass Rate (%)" position="top"
                 formatter={(v: number) => `${v}%`}
@@ -306,7 +330,7 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
   const triageCounts: Record<string, number> = {}
   failed.forEach(r => { const t = r.triage_type || 'Untriaged'; triageCounts[t] = (triageCounts[t] || 0) + 1 })
   const allTriageTypes = Object.entries(triageCounts).sort((a, b) => b[1] - a[1]).map(([t]) => t)
-  const tableTriageTypes = allTriageTypes.slice(0, TABLE_COLS) // top N for table columns
+  const tableTriageTypes = allTriageTypes.slice(0, TABLE_COLS_TRIAGE) // top N for table columns
 
   const byDate: Record<string, Record<string, number>> = {}
   cycles.forEach(c => { byDate[c.name] = {} })
@@ -339,7 +363,7 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
             <Tooltip labelFormatter={(_, p) => p?.[0]?.payload?.date ?? ''} />
             <Legend wrapperStyle={{ fontSize: 9, paddingTop: 4 }} />
             {allTriageTypes.map(t => (
-              <Bar key={t} dataKey={t} stackId="a" fill={triageColors[t] ?? '#cbd5e1'} />
+              <Bar key={t} dataKey={t} stackId="a" fill={triageColors[t] ?? '#cbd5e1'} isAnimationActive={false} />
             ))}
             <Bar dataKey="_zero" stackId="a" fill="transparent" legendType="none" isAnimationActive={false}>
               <LabelList dataKey="_zero" position="top" content={({ x, y, width, index }) => {
@@ -352,17 +376,15 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
         </Card>
 
         <Card>
-          <CardTitle>
-            Date-wise Triage Breakdown (Latest {tableRows.length} · Top {tableTriageTypes.length} types)
-          </CardTitle>
+          <CardTitle>Date-wise Triage Breakdown (Latest {tableRows.length} · Top {tableTriageTypes.length} types)</CardTitle>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f8fafc' }}>
                 <th style={{ ...thS, textAlign: 'left' }}>Date</th>
                 <th style={{ ...thS, textAlign: 'center' }}>Total</th>
                 {tableTriageTypes.map(t => (
-                  <th key={t} style={{ ...thS, textAlign: 'left' }}>
-                    <DotLabel color={triageColors[t] ?? '#9ca3af'} label={t} />
+                  <th key={t} style={{ ...thColS, maxWidth: 110, textAlign: 'left' }}>
+                    <DotLabel color={triageColors[t] ?? '#9ca3af'} label={t} maxChars={14} />
                   </th>
                 ))}
               </tr>
@@ -377,7 +399,7 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
                     {tableTriageTypes.map(t => (
                       <td key={t} style={{ ...tdS, textAlign: 'center' }}>
                         {counts[t]
-                          ? <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 8, fontSize: 9, fontWeight: 600, background: (triageColors[t] ?? '#9ca3af') + '22', color: triageColors[t] ?? '#6b7280' }}>{counts[t]}</span>
+                          ? <span style={{ fontSize: 9, fontWeight: 700, color: triageColors[t] ?? '#6b7280' }}>{counts[t]}</span>
                           : <span style={{ color: '#d1d5db' }}>—</span>}
                       </td>
                     ))}
@@ -408,7 +430,7 @@ function Page4({ cycles, allTitles, now }: { cycles: Cycle[]; allTitles: ScriptR
   })
 
   const modules = [...new Set(Object.values(titleFirstSeen).map(v => v.module))].sort()
-  const tableModules = modules.slice(0, TABLE_COLS)
+  const tableModules = modules.slice(0, TABLE_COLS_MODULE)
   const moduleColors = Object.fromEntries(modules.map((m, i) => [m, MODULE_PALETTE[i % MODULE_PALETTE.length]]))
 
   const newByDateMod: Record<string, Record<string, number>> = {}
@@ -443,24 +465,22 @@ function Page4({ cycles, allTitles, now }: { cycles: Cycle[]; allTitles: ScriptR
             <Tooltip />
             <Legend wrapperStyle={{ fontSize: 9, paddingTop: 4 }} />
             {modules.map(m => (
-              <Bar key={m} yAxisId="left" dataKey={m} stackId="a" fill={moduleColors[m]} />
+              <Bar key={m} yAxisId="left" dataKey={m} stackId="a" fill={moduleColors[m]} isAnimationActive={false} />
             ))}
-            <Line yAxisId="right" type="monotone" dataKey="Cumulative Total" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} />
+            <Line yAxisId="right" type="monotone" dataKey="Cumulative Total" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
           </ComposedChart>
         </Card>
 
         <Card>
-          <CardTitle>
-            New Scripts Per Date by Module (Latest {tableDates.length} · Top {tableModules.length} modules)
-          </CardTitle>
+          <CardTitle>New Scripts Per Date by Module (Latest {tableDates.length} · Top {tableModules.length} modules)</CardTitle>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f8fafc' }}>
                 <th style={{ ...thS, textAlign: 'left' }}>Date</th>
                 <th style={{ ...thS, textAlign: 'center' }}>Total New</th>
                 {tableModules.map(m => (
-                  <th key={m} style={{ ...thS, textAlign: 'left' }}>
-                    <DotLabel color={moduleColors[m]} label={m} />
+                  <th key={m} style={{ ...thColS, maxWidth: 80, textAlign: 'left' }}>
+                    <DotLabel color={moduleColors[m]} label={m} maxChars={11} />
                   </th>
                 ))}
               </tr>
@@ -476,7 +496,7 @@ function Page4({ cycles, allTitles, now }: { cycles: Cycle[]; allTitles: ScriptR
                     {tableModules.map(m => (
                       <td key={m} style={{ ...tdS, textAlign: 'center' }}>
                         {mods[m]
-                          ? <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 8, fontSize: 9, fontWeight: 600, background: moduleColors[m] + '22', color: moduleColors[m] }}>{mods[m]}</span>
+                          ? <span style={{ fontSize: 9, fontWeight: 700, color: moduleColors[m] }}>{mods[m]}</span>
                           : <span style={{ color: '#d1d5db' }}>—</span>}
                       </td>
                     ))}
