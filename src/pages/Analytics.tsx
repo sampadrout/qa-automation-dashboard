@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  BarChart, Bar, LineChart, Line, ComposedChart,
+  BarChart, Bar, LineChart, Line, ComposedChart, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList,
 } from 'recharts'
 import { Loader2, FileDown, ChevronRight, ChevronDown, CalendarRange } from 'lucide-react'
@@ -42,22 +42,12 @@ async function fetchFailedResults(): Promise<FailedRow[]> {
 }
 
 interface ScriptRow { cycle_id: string; test_title: string | null; module: string | null }
+// Fetches only the FIRST occurrence of each distinct test_title via a DB-side DISTINCT ON.
+// This is O(distinct titles) instead of O(all test rows), making tab load vastly faster.
 async function fetchAllTitles(): Promise<ScriptRow[]> {
-  const PAGE = 1000
-  const all: ScriptRow[] = []
-  let from = 0
-  while (true) {
-    const { data, error } = await supabase
-      .from('test_results')
-      .select('cycle_id, test_title, module')
-      .not('test_title', 'is', null)
-      .range(from, from + PAGE - 1)
-    if (error) throw error
-    all.push(...data)
-    if (data.length < PAGE) break
-    from += PAGE
-  }
-  return all
+  const { data, error } = await supabase.rpc('get_title_first_seen')
+  if (error) throw error
+  return data as ScriptRow[]
 }
 
 // ── Tooltip formatter ─────────────────────────────────────────────────────────
@@ -494,20 +484,15 @@ function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd
 
 // ── Tab: New Scripts ───────────────────────────────────────────────────────────
 function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd: string }) {
-  const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
-  const { data: allTitles = [], isLoading: lt } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 0 })
+  const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 5 * 60 * 1000 })
+  const { data: allTitles = [], isLoading: lt } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 5 * 60 * 1000 })
   const cycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
 
   const datesSorted = useMemo(() => cycles.map(c => c.name), [cycles])
 
-  // Derive modules from the normalised keys used in newByModule ('(none)' for nulls)
-  // so that <Bar> dataKeys match the chartData keys exactly
-  const modules = useMemo(() =>
-    [...new Set(titleStats.map(s => s.module || '(none)'))].sort(), [titleStats])
-
-  // For each test_title: first seen date, last seen date, run count, module
+  // For each test_title: first seen date, module (derived from the first-seen RPC result)
   const titleStats = useMemo(() => {
     const map: Record<string, { firstSeen: string; lastSeen: string; runs: Set<string>; module: string }> = {}
     allTitles.forEach(r => {
@@ -531,6 +516,10 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
       module: s.module,
     })).sort((a, b) => a.firstSeen.localeCompare(b.firstSeen) || a.module.localeCompare(b.module))
   }, [allTitles, cycleMap])
+
+  // Derive modules from the normalised keys ('(none)' for nulls) — must come after titleStats
+  const modules = useMemo(() =>
+    [...new Set(titleStats.map(s => s.module || '(none)'))].sort(), [titleStats])
 
   // New scripts per date × module
   const newByModule = useMemo(() => {
@@ -562,6 +551,18 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
     Object.fromEntries(modules.map((m, i) => [m, MODULE_PALETTE[i % MODULE_PALETTE.length]])),
   [modules])
 
+  // Cumulative test-case count per module over time (running total per date)
+  const growthData = useMemo(() => {
+    const running: Record<string, number> = {}
+    return datesSorted.map(date => {
+      const newThisDate = newByModule[date] ?? {}
+      Object.entries(newThisDate).forEach(([mod, n]) => {
+        running[mod] = (running[mod] ?? 0) + n
+      })
+      return { date, label: fmtDate(date), ...Object.fromEntries(Object.entries(running)) }
+    })
+  }, [newByModule, datesSorted])
+
   // date → module → sorted list of test titles first seen on that date
   const newTitlesByDateModule = useMemo(() => {
     const map: Record<string, Record<string, string[]>> = {}
@@ -586,6 +587,16 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
       return next
     })
   }
+
+  const [hiddenModules, setHiddenModules] = useState<Set<string>>(new Set())
+  function toggleModule(mod: string) {
+    setHiddenModules(prev => {
+      const next = new Set(prev)
+      next.has(mod) ? next.delete(mod) : next.add(mod)
+      return next
+    })
+  }
+  const visibleModules = modules.filter(m => !hiddenModules.has(m))
 
   if (lc || lt) return <Spinner />
 
@@ -616,6 +627,97 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
         </ResponsiveContainer>
       </Section>
 
+      {/* Test case growth per module over time — stacked area with module toggles */}
+      <Section title="Test Case Growth Per Module Over Time">
+        {/* Toolbar: toggles + download */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div className="flex flex-wrap gap-2">
+          {modules.map(m => {
+            const hidden = hiddenModules.has(m)
+            return (
+              <button
+                key={m}
+                onClick={() => toggleModule(m)}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all"
+                style={{
+                  borderColor: moduleColors[m],
+                  background: hidden ? '#f9fafb' : moduleColors[m] + '22',
+                  color: hidden ? '#9ca3af' : moduleColors[m],
+                  opacity: hidden ? 0.6 : 1,
+                }}
+              >
+                <span
+                  className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ background: hidden ? '#d1d5db' : moduleColors[m] }}
+                />
+                {m}
+              </button>
+            )
+          })}
+          {hiddenModules.size > 0 && (
+            <button
+              onClick={() => setHiddenModules(new Set())}
+              className="px-3 py-1 rounded-full text-xs font-medium border border-gray-300 text-gray-500 hover:bg-gray-100 transition-all"
+            >
+              Show all
+            </button>
+          )}
+        </div>
+        <button
+          onClick={() => {
+            const cols = ['Date', ...modules]
+            const rows = growthData.map(d => [
+              d.date,
+              ...modules.map(m => ((d as Record<string, unknown>)[m] ?? 0) as number),
+            ])
+            const csv = [cols, ...rows].map(r => r.join(',')).join('\n')
+            const a = document.createElement('a')
+            a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+            a.download = 'test-case-growth.csv'
+            a.click()
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-all flex-shrink-0"
+        >
+          <FileDown size={13} />
+          Download CSV
+        </button>
+        </div>
+
+        <ResponsiveContainer width="100%" height={360}>
+          <AreaChart data={growthData} margin={{ top: 16, right: 24, left: 0, bottom: 8 }}>
+            <defs>
+              {modules.map(m => (
+                <linearGradient key={m} id={`grad-${m}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={moduleColors[m]} stopOpacity={0.55} />
+                  <stop offset="95%" stopColor={moduleColors[m]} stopOpacity={0.08} />
+                </linearGradient>
+              ))}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} />
+            <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={44} />
+            <Tooltip
+              labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
+              formatter={(value: number, name: string) => [value.toLocaleString(), name]}
+              contentStyle={{ fontSize: 12 }}
+            />
+            {visibleModules.map(m => (
+              <Area
+                key={m}
+                type="monotone"
+                dataKey={m}
+                stackId="1"
+                stroke={moduleColors[m]}
+                strokeWidth={1.5}
+                fill={`url(#grad-${m})`}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            ))}
+          </AreaChart>
+        </ResponsiveContainer>
+      </Section>
+
       {/* Date × Module new scripts table */}
       <Section title="New Scripts Per Date by Module">
         <div className="overflow-x-auto">
@@ -634,7 +736,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {datesSorted.slice(1).map(date => {
+              {datesSorted.slice(1).slice().reverse().map(date => {
                 const mods = newByModule[date] ?? {}
                 const total = Object.values(mods).reduce((a, b) => a + b, 0)
                 const isExpanded = expandedDates.has(date)
@@ -932,7 +1034,7 @@ export default function Analytics() {
   // Pre-fetch all data so ReportContent off-screen component is always populated
   const { data: reportCycles = [] } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: reportFailed = [] } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
-  const { data: reportTitles = [] } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 0 })
+  const { data: reportTitles = [] } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 5 * 60 * 1000 })
 
   async function handleExportPDF() {
     if (!reportRef.current) return
