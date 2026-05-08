@@ -41,6 +41,13 @@ async function fetchFailedResults(): Promise<FailedRow[]> {
   return all
 }
 
+interface ModuleCountRow { cycle_id: string; module: string; test_count: number }
+async function fetchModuleCounts(): Promise<ModuleCountRow[]> {
+  const { data, error } = await supabase.rpc('get_module_counts_per_cycle')
+  if (error) throw error
+  return data as ModuleCountRow[]
+}
+
 interface ScriptRow { cycle_id: string; test_title: string | null; module: string | null }
 // Fetches only the FIRST occurrence of each distinct test_title via a DB-side DISTINCT ON.
 // This is O(distinct titles) instead of O(all test rows), making tab load vastly faster.
@@ -1035,6 +1042,7 @@ export default function Analytics() {
   const { data: reportCycles = [] } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: reportFailed = [] } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
   const { data: reportTitles = [] } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 5 * 60 * 1000 })
+  const { data: reportModuleCounts = [] } = useQuery({ queryKey: ['module-counts'], queryFn: fetchModuleCounts, staleTime: 5 * 60 * 1000 })
 
   async function handleExportPDF() {
     if (!reportRef.current) return
@@ -1063,6 +1071,7 @@ export default function Analytics() {
           cycles={reportCycles}
           failed={reportFailed}
           allTitles={reportTitles}
+          moduleCounts={reportModuleCounts}
           triageColors={triageColors}
         />
       </div>

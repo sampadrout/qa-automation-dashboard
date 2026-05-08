@@ -1,16 +1,18 @@
 import {
-  LineChart, Line, BarChart, Bar, ComposedChart,
+  LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList,
 } from 'recharts'
 import type { Cycle } from '@/lib/types'
 
-interface FailedRow { cycle_id: string; module: string | null; triage_type: string | null }
-interface ScriptRow  { cycle_id: string; test_title: string | null; module: string | null }
+interface FailedRow     { cycle_id: string; module: string | null; triage_type: string | null }
+interface ScriptRow     { cycle_id: string; test_title: string | null; module: string | null }
+interface ModuleCountRow { cycle_id: string; module: string; test_count: number }
 
 interface Props {
   cycles: Cycle[]
   failed: FailedRow[]
   allTitles: ScriptRow[]
+  moduleCounts: ModuleCountRow[]
   triageColors: Record<string, string>
 }
 
@@ -135,7 +137,7 @@ function CardTitle({ children }: { children: React.ReactNode }) {
 }
 
 // ── Page 1: Executive Summary ─────────────────────────────────────────────────
-function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> & { now: string }) {
+function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 'moduleCounts'> & { now: string }) {
   const latest = cycles[cycles.length - 1]
   if (!latest) return null
 
@@ -323,7 +325,7 @@ function Page2({ cycles, now }: { cycles: Cycle[]; now: string }) {
 }
 
 // ── Page 3: Failure Distribution ──────────────────────────────────────────────
-function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> & { now: string }) {
+function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 'moduleCounts'> & { now: string }) {
   const cycleMap = Object.fromEntries(cycles.map(c => [c.id, c.name]))
 
   // Top triage types by total count, capped for table columns
@@ -416,11 +418,12 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles'> &
   )
 }
 
-// ── Page 4: New Scripts ───────────────────────────────────────────────────────
-function Page4({ cycles, allTitles, now }: { cycles: Cycle[]; allTitles: ScriptRow[]; now: string }) {
+// ── Page 4: Test Case Growth ───────────────────────────────────────────────────
+function Page4({ cycles, allTitles, moduleCounts, now }: { cycles: Cycle[]; allTitles: ScriptRow[]; moduleCounts: ModuleCountRow[]; now: string }) {
   const cycleMap = Object.fromEntries(cycles.map(c => [c.id, c.name]))
   const datesSorted = cycles.map(c => c.name)
 
+  // First-seen per title (RPC already returns one row per title, so just map directly)
   const titleFirstSeen: Record<string, { date: string; module: string }> = {}
   allTitles.forEach(r => {
     if (!r.test_title) return
@@ -430,9 +433,9 @@ function Page4({ cycles, allTitles, now }: { cycles: Cycle[]; allTitles: ScriptR
   })
 
   const modules = [...new Set(Object.values(titleFirstSeen).map(v => v.module))].sort()
-  const tableModules = modules.slice(0, TABLE_COLS_MODULE)
   const moduleColors = Object.fromEntries(modules.map((m, i) => [m, MODULE_PALETTE[i % MODULE_PALETTE.length]]))
 
+  // Incremental new per date × module
   const newByDateMod: Record<string, Record<string, number>> = {}
   datesSorted.forEach(d => { newByDateMod[d] = {} })
   Object.values(titleFirstSeen).forEach(({ date, module: mod }) => {
@@ -440,88 +443,115 @@ function Page4({ cycles, allTitles, now }: { cycles: Cycle[]; allTitles: ScriptR
     newByDateMod[date][mod] = (newByDateMod[date][mod] || 0) + 1
   })
 
-  let cumulative = 0
-  const chartData = datesSorted.slice(1).map(date => {
-    const mods = newByDateMod[date] ?? {}
-    const total = Object.values(mods).reduce((a, b) => a + b, 0)
-    cumulative += total
-    return { label: fmtDate(date), ...mods, 'Cumulative Total': cumulative, _total: total }
+  // Cumulative count per module per date (growth data)
+  const growthData = (() => {
+    const running: Record<string, number> = {}
+    return datesSorted.map(date => {
+      const newThisDate = newByDateMod[date] ?? {}
+      Object.entries(newThisDate).forEach(([mod, n]) => { running[mod] = (running[mod] ?? 0) + n })
+      return { date, label: fmtDate(date), ...Object.fromEntries(Object.entries(running)) }
+    })
+  })()
+
+  // Build per-cycle per-module lookup from real counts
+  // countsMap[cycle_id][module] = test_count
+  const countsMap: Record<string, Record<string, number>> = {}
+  moduleCounts.forEach(r => {
+    if (!countsMap[r.cycle_id]) countsMap[r.cycle_id] = {}
+    countsMap[r.cycle_id][r.module] = r.test_count
   })
 
-  const allTableDates = datesSorted.slice(1).reverse()
-  const tableDates = allTableDates.slice(0, TABLE_ROWS)
+  // All modules that appear in ANY cycle's counts (for table columns)
+  const allCountModules = [...new Set(moduleCounts.map(r => r.module))].sort()
+  const tableCountModules = allCountModules.slice(0, TABLE_COLS_MODULE)
+  const allCountColors = Object.fromEntries(allCountModules.map((m, i) => [m, MODULE_PALETTE[i % MODULE_PALETTE.length]]))
+
+  // Latest 5 cycles (most recent first, ordered by name desc)
+  const latest5Cycles = cycles.slice().reverse().slice(0, 5)
 
   return (
     <div data-page="4" style={pageBase}>
-      <PageHeader title="New Scripts Added" sub="First-seen test scripts per run by module" now={now} page={4} total={4} />
+      <PageHeader title="Test Case Growth" sub="Cumulative test cases per module over time" now={now} page={4} total={4} />
       <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
         <Card>
-          <CardTitle>New Scripts Per Run by Module</CardTitle>
-          <ComposedChart width={CHART_W} height={218} data={chartData} margin={{ top: 10, right: 40, left: 0, bottom: 2 }}>
+          <CardTitle>Test Case Growth Per Module Over Time</CardTitle>
+          <AreaChart width={CHART_W} height={220} data={growthData} margin={{ top: 10, right: 16, left: 0, bottom: 2 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f4f8" />
             <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#64748b' }} interval={0} />
-            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} />
-            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} />
+            <YAxis tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} width={36} />
             <Tooltip />
             <Legend wrapperStyle={{ fontSize: 9, paddingTop: 4 }} />
             {modules.map(m => (
-              <Bar key={m} yAxisId="left" dataKey={m} stackId="a" fill={moduleColors[m]} isAnimationActive={false} />
+              <Area
+                key={m}
+                type="monotone"
+                dataKey={m}
+                stackId="1"
+                stroke={moduleColors[m]}
+                strokeWidth={1.5}
+                fill={moduleColors[m]}
+                fillOpacity={0.4}
+                dot={false}
+                isAnimationActive={false}
+              />
             ))}
-            <Line yAxisId="right" type="monotone" dataKey="Cumulative Total" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
-          </ComposedChart>
+          </AreaChart>
         </Card>
 
         <Card>
-          <CardTitle>New Scripts Per Date by Module (Latest {tableDates.length} · Top {tableModules.length} modules)</CardTitle>
+          <CardTitle>Latest {latest5Cycles.length} Runs — Total Tests Per Module</CardTitle>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f8fafc' }}>
-                <th style={{ ...thS, textAlign: 'left' }}>Date</th>
-                <th style={{ ...thS, textAlign: 'center' }}>Total New</th>
-                {tableModules.map(m => (
+                <th style={{ ...thS, textAlign: 'left' }}>Run</th>
+                <th style={{ ...thS, textAlign: 'center' }}>Total</th>
+                {tableCountModules.map(m => (
                   <th key={m} style={{ ...thColS, maxWidth: 80, textAlign: 'left' }}>
-                    <DotLabel color={moduleColors[m]} label={m} maxChars={11} />
+                    <DotLabel color={allCountColors[m]} label={m} maxChars={11} />
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {tableDates.map((date, i) => {
-                const mods = newByDateMod[date] ?? {}
-                const total = Object.values(mods).reduce((a, b) => a + b, 0)
+              {latest5Cycles.map((cycle, i) => {
+                const modCounts = countsMap[cycle.id] ?? {}
+                const total = cycle.total_tests
                 return (
-                  <tr key={date} style={{ background: i % 2 === 1 ? '#f8fafc' : '#fff' }}>
-                    <td style={{ ...tdS, fontWeight: 600 }}>{date}</td>
-                    <td style={{ ...tdS, textAlign: 'center', fontWeight: 700, color: '#2563eb' }}>{total || '—'}</td>
-                    {tableModules.map(m => (
-                      <td key={m} style={{ ...tdS, textAlign: 'center' }}>
-                        {mods[m]
-                          ? <span style={{ fontSize: 9, fontWeight: 700, color: moduleColors[m] }}>{mods[m]}</span>
-                          : <span style={{ color: '#d1d5db' }}>—</span>}
-                      </td>
-                    ))}
+                  <tr key={cycle.id} style={{ background: i % 2 === 1 ? '#f8fafc' : '#fff' }}>
+                    <td style={{ ...tdS, fontWeight: 600 }}>{cycle.name}</td>
+                    <td style={{ ...tdS, textAlign: 'center', fontWeight: 700, color: '#2563eb' }}>{total.toLocaleString()}</td>
+                    {tableCountModules.map(m => {
+                      const val = modCounts[m] ?? 0
+                      return (
+                        <td key={m} style={{ ...tdS, textAlign: 'center' }}>
+                          {val > 0
+                            ? <span style={{ fontSize: 9, fontWeight: 700, color: allCountColors[m] }}>{val}</span>
+                            : <span style={{ color: '#d1d5db' }}>—</span>}
+                        </td>
+                      )
+                    })}
                   </tr>
                 )
               })}
             </tbody>
           </table>
-          <RowNote shown={tableDates.length} total={allTableDates.length} />
         </Card>
       </div>
-      <PageFooter label="New Scripts" />
+      <PageFooter label="Test Case Growth" />
     </div>
   )
 }
 
 // ── Root export ───────────────────────────────────────────────────────────────
-export default function ReportContent({ cycles, failed, allTitles, triageColors }: Props) {
+export default function ReportContent({ cycles, failed, allTitles, moduleCounts, triageColors }: Props) {
   const now = new Date().toLocaleString()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       <Page1 cycles={cycles} failed={failed} triageColors={triageColors} now={now} />
       <Page2 cycles={cycles} now={now} />
       <Page3 cycles={cycles} failed={failed} triageColors={triageColors} now={now} />
-      <Page4 cycles={cycles} allTitles={allTitles} now={now} />
+      <Page4 cycles={cycles} allTitles={allTitles} moduleCounts={moduleCounts} now={now} />
     </div>
   )
 }
