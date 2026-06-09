@@ -49,13 +49,23 @@ export default function CycleDetail() {
   const { data: results = [], isLoading } = useQuery<TestResult[]>({
     queryKey: ['test_results', id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('test_results')
-        .select('*')
-        .eq('cycle_id', id!)
-        .order('row_num', { ascending: true })
-      if (error) throw error
-      return data
+      // PostgREST caps a single select at 1000 rows, so page through all results
+      const PAGE = 1000
+      const all: TestResult[] = []
+      let from = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from('test_results')
+          .select('*')
+          .eq('cycle_id', id!)
+          .order('row_num', { ascending: true })
+          .range(from, from + PAGE - 1)
+        if (error) throw error
+        all.push(...(data as TestResult[]))
+        if (data.length < PAGE) break
+        from += PAGE
+      }
+      return all
     },
     enabled: !!id,
   })
