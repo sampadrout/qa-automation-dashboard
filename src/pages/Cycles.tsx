@@ -25,6 +25,7 @@ export default function Cycles() {
       const { data, error } = await supabase
         .from('cycles')
         .select('*')
+        .eq('kind', 'regression')
         .order('uploaded_at', { ascending: false })
       if (error) throw error
       return data
@@ -53,7 +54,7 @@ export default function Cycles() {
       // 2. Create cycle row
       const { data: cycleData, error: cycleErr } = await db
         .from('cycles')
-        .insert({ name: cycleName, status: 'processing' })
+        .insert({ name: cycleName, status: 'processing', kind: 'regression' })
         .select('id')
         .single()
       if (cycleErr) throw cycleErr

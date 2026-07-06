@@ -1,6 +1,6 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
-import { LogOut, FlaskConical, BarChart2, Settings } from 'lucide-react'
+import { LogOut, FlaskConical, BarChart2, Settings, Zap } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useIsAdmin } from '@/lib/hooks'
 
@@ -29,6 +29,13 @@ export default function Layout({ session }: Props) {
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${pathname === '/' ? 'bg-brand-50 text-brand-600' : 'text-gray-500 hover:text-gray-800'}`}
           >
             Cycles
+          </Link>
+          <Link
+            to="/smoke"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${pathname.startsWith('/smoke') ? 'bg-brand-50 text-brand-600' : 'text-gray-500 hover:text-gray-800'}`}
+          >
+            <Zap size={15} />
+            Smoke Tests
           </Link>
           <Link
             to="/analytics"

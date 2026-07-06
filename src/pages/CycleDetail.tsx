@@ -123,12 +123,15 @@ export default function CycleDetail() {
       setEdits(prev => { const n = { ...prev }; delete n[row.id]; return n })
       queryClient.invalidateQueries({ queryKey: ['test_results', id] })
       queryClient.invalidateQueries({ queryKey: ['failed-results'] })
+      queryClient.invalidateQueries({ queryKey: ['smoke-results'] })
     } finally {
       setSaving(null)
     }
   }
 
   const isDirty = (rowId: string) => rowId in edits
+
+  const backTo = cycle?.kind === 'smoke' ? '/smoke' : '/'
 
   const stats = cycle ? {
     pass: Math.round((cycle.passed / (cycle.total_tests || 1)) * 100),
@@ -149,6 +152,7 @@ export default function CycleDetail() {
       if (error) throw error
       queryClient.invalidateQueries({ queryKey: ['cycle', id] })
       queryClient.invalidateQueries({ queryKey: ['cycles'] })
+      queryClient.invalidateQueries({ queryKey: ['smoke-cycles'] })
       setRenaming(false)
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Rename failed')
@@ -165,7 +169,8 @@ export default function CycleDetail() {
       const { error } = await (supabase as any).from('cycles').delete().eq('id', id!)
       if (error) throw error
       queryClient.invalidateQueries({ queryKey: ['cycles'] })
-      navigate('/')
+      queryClient.invalidateQueries({ queryKey: ['smoke-cycles'] })
+      navigate(backTo)
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Delete failed')
       setDeleting(false)
@@ -202,7 +207,7 @@ export default function CycleDetail() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div className="flex items-center gap-3">
-          <Link to="/" className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors">
+          <Link to={backTo} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors">
             <ArrowLeft size={18} />
           </Link>
           <div>

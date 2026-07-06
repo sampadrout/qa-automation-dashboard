@@ -5,6 +5,7 @@ import { supabase, missingEnv } from '@/lib/supabase'
 import Login from '@/pages/Login'
 import Cycles from '@/pages/Cycles'
 import CycleDetail from '@/pages/CycleDetail'
+import SmokeTests from '@/pages/SmokeTests'
 import Analytics from '@/pages/Analytics'
 import Settings from '@/pages/Settings'
 import Layout from '@/components/Layout'
@@ -52,6 +53,7 @@ function App() {
         >
           <Route index element={<Cycles />} />
           <Route path="cycles/:id" element={<CycleDetail />} />
+          <Route path="smoke" element={<SmokeTests />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="settings" element={<Settings />} />
         </Route>

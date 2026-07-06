@@ -7,6 +7,7 @@ import type { Cycle } from '@/lib/types'
 interface FailedRow     { cycle_id: string; module: string | null; triage_type: string | null }
 interface ScriptRow     { cycle_id: string; test_title: string | null; module: string | null }
 interface ModuleCountRow { cycle_id: string; module: string; test_count: number }
+interface SmokeResultRow { cycle_id: string; module: string | null; state: string | null; triage_type: string | null }
 
 interface Props {
   cycles: Cycle[]
@@ -14,6 +15,8 @@ interface Props {
   allTitles: ScriptRow[]
   moduleCounts: ModuleCountRow[]
   triageColors: Record<string, string>
+  smokeCycles?: Cycle[]
+  smokeResults?: SmokeResultRow[]
 }
 
 export const PAGE_W = 1080
@@ -137,7 +140,7 @@ function CardTitle({ children }: { children: React.ReactNode }) {
 }
 
 // ── Page 1: Executive Summary ─────────────────────────────────────────────────
-function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 'moduleCounts'> & { now: string }) {
+function Page1({ cycles, failed, triageColors, now, total }: Omit<Props, 'allTitles' | 'moduleCounts' | 'smokeCycles' | 'smokeResults'> & { now: string; total: number }) {
   const latest = cycles[cycles.length - 1]
   if (!latest) return null
 
@@ -159,7 +162,7 @@ function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 
 
   return (
     <div data-page="1" style={pageBase}>
-      <PageHeader title="QA Run Status Report" sub={latest.name} now={now} page={1} total={4} />
+      <PageHeader title="XR Pay - QA Run Status Report" sub={latest.name} now={now} page={1} total={total} />
       <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         {/* KPI row */}
         <div style={{ display: 'flex', gap: 10 }}>
@@ -253,7 +256,7 @@ function Page1({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 
 }
 
 // ── Page 2: Pass Rate Trend ───────────────────────────────────────────────────
-function Page2({ cycles, now }: { cycles: Cycle[]; now: string }) {
+function Page2({ cycles, now, total }: { cycles: Cycle[]; now: string; total: number }) {
   const passRateData = cycles.map(c => ({
     label: fmtDate(c.name),
     'Pass Rate (%)': c.total_tests > 0 ? Math.round((c.passed / c.total_tests) * 1000) / 10 : 0,
@@ -264,7 +267,7 @@ function Page2({ cycles, now }: { cycles: Cycle[]; now: string }) {
 
   return (
     <div data-page="2" style={pageBase}>
-      <PageHeader title="Pass Rate Trend" sub="All cycles — pass rate over time" now={now} page={2} total={4} />
+      <PageHeader title="Pass Rate Trend" sub="All cycles — pass rate over time" now={now} page={2} total={total} />
       <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Card>
           <CardTitle>Pass Rate % Over Time</CardTitle>
@@ -325,7 +328,7 @@ function Page2({ cycles, now }: { cycles: Cycle[]; now: string }) {
 }
 
 // ── Page 3: Failure Distribution ──────────────────────────────────────────────
-function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 'moduleCounts'> & { now: string }) {
+function Page3({ cycles, failed, triageColors, now, total }: Omit<Props, 'allTitles' | 'moduleCounts' | 'smokeCycles' | 'smokeResults'> & { now: string; total: number }) {
   const cycleMap = Object.fromEntries(cycles.map(c => [c.id, c.name]))
 
   // Top triage types by total count, capped for table columns
@@ -354,7 +357,7 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 
 
   return (
     <div data-page="3" style={pageBase}>
-      <PageHeader title="Failure Distribution" sub="Triage type breakdown across all cycles" now={now} page={3} total={4} />
+      <PageHeader title="Failure Distribution" sub="Triage type breakdown across all cycles" now={now} page={3} total={total} />
       <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Card>
           <CardTitle>Failure Distribution by Triage Type Over Time</CardTitle>
@@ -419,7 +422,7 @@ function Page3({ cycles, failed, triageColors, now }: Omit<Props, 'allTitles' | 
 }
 
 // ── Page 4: Test Case Growth ───────────────────────────────────────────────────
-function Page4({ cycles, allTitles, moduleCounts, now }: { cycles: Cycle[]; allTitles: ScriptRow[]; moduleCounts: ModuleCountRow[]; now: string }) {
+function Page4({ cycles, allTitles, moduleCounts, now, total }: { cycles: Cycle[]; allTitles: ScriptRow[]; moduleCounts: ModuleCountRow[]; now: string; total: number }) {
   const cycleMap = Object.fromEntries(cycles.map(c => [c.id, c.name]))
   const datesSorted = cycles.map(c => c.name)
 
@@ -471,7 +474,7 @@ function Page4({ cycles, allTitles, moduleCounts, now }: { cycles: Cycle[]; allT
 
   return (
     <div data-page="4" style={pageBase}>
-      <PageHeader title="Test Case Growth" sub="Cumulative test cases per module over time" now={now} page={4} total={4} />
+      <PageHeader title="Test Case Growth" sub="Cumulative test cases per module over time" now={now} page={4} total={total} />
       <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
 
         <Card>
@@ -543,15 +546,224 @@ function Page4({ cycles, allTitles, moduleCounts, now }: { cycles: Cycle[]; allT
   )
 }
 
+// "Smoke 2026-06-28 12:00:00" → "Jun 28, 12:00"
+function smokeLabel(name: string) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  const m = name.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/)
+  if (m) return `${months[parseInt(m[2]) - 1]} ${parseInt(m[3])}, ${m[4]}:${m[5]}`
+  return fmtDate(name)
+}
+
+const SMOKE_TREND_MAX = 14   // most-recent runs charted (keeps PDF readable)
+const SMOKE_MATRIX_MAX = 6   // most-recent runs shown as matrix columns
+
+// ── Smoke Page 1: Latest-run health + pass-rate trend ──────────────────────────
+function SmokePage1({ smokeCycles, now, page, total }: { smokeCycles: Cycle[]; now: string; page: number; total: number }) {
+  const chrono = smokeCycles
+  const latest = chrono[chrono.length - 1]
+  if (!latest) return null
+
+  const passRate = pct(latest.passed, latest.total_tests)
+  const failTotal = latest.failed + latest.pending
+  const rateColor = passRate >= 90 ? '#16a34a' : passRate >= 70 ? '#d97706' : '#dc2626'
+
+  const trend = chrono.slice(-SMOKE_TREND_MAX).map(c => ({
+    label: smokeLabel(c.name),
+    'Pass Rate (%)': c.total_tests > 0 ? Math.round((c.passed / c.total_tests) * 1000) / 10 : 0,
+  }))
+
+  const r = 64, cx = 80, cy = 80
+  const circ = Math.PI * r
+  const arcOffset = circ * (1 - passRate / 100)
+
+  return (
+    <div data-page="smoke-1" style={pageBase}>
+      <PageHeader title="Smoke Tests — Health" sub={`Latest run: ${smokeLabel(latest.name)}`} now={now} page={page} total={total} />
+      <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* KPI row */}
+        <div style={{ display: 'flex', gap: 10 }}>
+          {[
+            { label: 'Total Tests',    value: latest.total_tests, color: '#2563eb', sub: '' },
+            { label: 'Passed',         value: latest.passed,      color: '#16a34a', sub: `${pct(latest.passed, latest.total_tests)}% pass rate` },
+            { label: 'Failed',         value: latest.failed,      color: '#dc2626', sub: `${pct(latest.failed, latest.total_tests)}% of run` },
+            { label: 'Pending',        value: latest.pending,     color: '#d97706', sub: `${pct(latest.pending, latest.total_tests)}% of run` },
+            { label: 'Runs Recorded',  value: chrono.length,      color: '#7c3aed', sub: 'smoke runs' },
+          ].map(({ label, value, color, sub }) => (
+            <div key={label} style={{
+              flex: 1, background: '#fff', borderRadius: 10, padding: '10px 14px',
+              borderTop: `3px solid ${color}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color, lineHeight: 1.1, marginTop: 3 }}>{value.toLocaleString()}</div>
+              {sub && <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 2 }}>{sub}</div>}
+            </div>
+          ))}
+        </div>
+
+        {/* Trend + gauge */}
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Card style={{ flex: 1 }}>
+            <CardTitle>Pass Rate % Over Runs (latest {trend.length})</CardTitle>
+            <LineChart width={CHART_W - 250} height={230} data={trend} margin={{ top: 16, right: 16, left: 0, bottom: 2 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f4f8" />
+              <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#64748b' }} interval={0} angle={-20} textAnchor="end" height={44} />
+              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 10, fill: '#64748b' }} width={38} />
+              <Tooltip formatter={(v: number) => [`${v}%`, 'Pass Rate']} />
+              <Line type="monotone" dataKey="Pass Rate (%)" stroke="#f59e0b" strokeWidth={2.5}
+                isAnimationActive={false}
+                dot={{ r: 4, fill: '#f59e0b', strokeWidth: 0 }} activeDot={{ r: 6 }}>
+                <LabelList dataKey="Pass Rate (%)" position="top"
+                  formatter={(v: number) => `${v}%`}
+                  style={{ fontSize: 9, fontWeight: 700, fill: '#b45309' }} />
+              </Line>
+            </LineChart>
+          </Card>
+
+          <Card style={{ width: 230, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <CardTitle>Latest Run Health</CardTitle>
+            <svg width={cx * 2} height={cy + 12} viewBox={`0 0 ${cx * 2} ${cy + 12}`}>
+              <path d={`M ${cx-r},${cy} A ${r},${r} 0 0 1 ${cx+r},${cy}`} fill="none" stroke="#e2e8f0" strokeWidth={13} strokeLinecap="round" />
+              <path d={`M ${cx-r},${cy} A ${r},${r} 0 0 1 ${cx+r},${cy}`} fill="none" stroke={rateColor} strokeWidth={13} strokeLinecap="round"
+                strokeDasharray={`${circ}`} strokeDashoffset={`${arcOffset}`} />
+              <text x={cx} y={cy - 8} textAnchor="middle" fontSize={22} fontWeight={800} fill={rateColor}>{passRate}%</text>
+              <text x={cx} y={cy + 4} textAnchor="middle" fontSize={8} fill="#94a3b8">Pass Rate</text>
+            </svg>
+            <div style={{ width: '100%', marginTop: 6 }}>
+              {[{ label: 'Passed', val: latest.passed, color: '#16a34a' }, { label: 'Failed', val: latest.failed, color: '#dc2626' }, { label: 'Pending', val: latest.pending, color: '#d97706' }].map(({ label, val, color }) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #f1f5f9', minWidth: 0 }}>
+                  <DotLabel color={color} label={label} maxChars={99} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color, flexShrink: 0, paddingLeft: 8 }}>{val.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{
+              marginTop: 10, padding: '4px 12px', borderRadius: 20,
+              background: passRate >= 90 ? '#dcfce7' : passRate >= 70 ? '#fef9c3' : '#fee2e2',
+              color: passRate >= 90 ? '#15803d' : passRate >= 70 ? '#92400e' : '#991b1b',
+              fontSize: 10, fontWeight: 700,
+            }}>
+              {passRate >= 90 ? 'HEALTHY' : passRate >= 70 ? 'NEEDS ATTENTION' : 'CRITICAL'} · {failTotal} failing
+            </div>
+          </Card>
+        </div>
+      </div>
+      <PageFooter label="Smoke Tests — Health" />
+    </div>
+  )
+}
+
+// ── Smoke Page 2: Module health matrix + failure distribution ──────────────────
+function SmokePage2({ smokeCycles, smokeResults, triageColors, now, page, total }: { smokeCycles: Cycle[]; smokeResults: SmokeResultRow[]; triageColors: Record<string, string>; now: string; page: number; total: number }) {
+  const chrono = smokeCycles
+
+  // Per-run per-module pass/total
+  const perCycle: Record<string, Record<string, { passed: number; total: number }>> = {}
+  smokeResults.forEach(r => {
+    const mod = r.module || '(none)'
+    if (!perCycle[r.cycle_id]) perCycle[r.cycle_id] = {}
+    if (!perCycle[r.cycle_id][mod]) perCycle[r.cycle_id][mod] = { passed: 0, total: 0 }
+    perCycle[r.cycle_id][mod].total += 1
+    if (r.state === 'passed') perCycle[r.cycle_id][mod].passed += 1
+  })
+  const modules = [...new Set(smokeResults.map(r => r.module || '(none)'))].sort()
+  const matrixRuns = chrono.slice(-SMOKE_MATRIX_MAX)
+
+  // Failure distribution by triage type per run
+  const failures = smokeResults.filter(r => r.state !== 'passed')
+  const triageCounts: Record<string, number> = {}
+  failures.forEach(r => { const t = r.triage_type || 'Untriaged'; triageCounts[t] = (triageCounts[t] || 0) + 1 })
+  const allTriageTypes = Object.entries(triageCounts).sort((a, b) => b[1] - a[1]).map(([t]) => t)
+
+  const byCycle: Record<string, Record<string, number>> = {}
+  failures.forEach(r => {
+    if (!byCycle[r.cycle_id]) byCycle[r.cycle_id] = {}
+    const t = r.triage_type || 'Untriaged'
+    byCycle[r.cycle_id][t] = (byCycle[r.cycle_id][t] || 0) + 1
+  })
+  const distData = chrono.slice(-SMOKE_TREND_MAX).map(c => {
+    const counts = byCycle[c.id] ?? {}
+    return { label: smokeLabel(c.name), _total: Object.values(counts).reduce((a, b) => a + b, 0), _zero: 0, ...counts }
+  })
+
+  return (
+    <div data-page="smoke-2" style={pageBase}>
+      <PageHeader title="Smoke Tests — Modules & Failures" sub="Module health and triage distribution" now={now} page={page} total={total} />
+      <div style={{ padding: '12px 22px 30px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Card>
+          <CardTitle>Module Health — Pass Rate per Run (latest {matrixRuns.length})</CardTitle>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#f8fafc' }}>
+                <th style={{ ...thS, textAlign: 'left' }}>Module</th>
+                {matrixRuns.map(run => (
+                  <th key={run.id} style={{ ...thS, textAlign: 'center' }}>{smokeLabel(run.name)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {modules.map((mod, i) => (
+                <tr key={mod} style={{ background: i % 2 === 1 ? '#f8fafc' : '#fff' }}>
+                  <td style={{ ...tdS, fontWeight: 600 }}>{mod}</td>
+                  {matrixRuns.map(run => {
+                    const cell = perCycle[run.id]?.[mod]
+                    if (!cell) return <td key={run.id} style={{ ...tdS, textAlign: 'center', color: '#d1d5db' }}>—</td>
+                    const rate = cell.total > 0 ? Math.round((cell.passed / cell.total) * 100) : 0
+                    const color = rate >= 90 ? '#16a34a' : rate >= 70 ? '#d97706' : '#dc2626'
+                    return (
+                      <td key={run.id} style={{ ...tdS, textAlign: 'center' }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color }}>{rate}%</span>
+                        <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 3 }}>{cell.passed}/{cell.total}</span>
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card>
+          <CardTitle>Failure Distribution by Triage Type Over Runs</CardTitle>
+          {allTriageTypes.length === 0
+            ? <div style={{ fontSize: 11, color: '#94a3b8' }}>No failures recorded across smoke runs</div>
+            : <BarChart width={CHART_W} height={218} data={distData} margin={{ top: 6, right: 16, left: 0, bottom: 2 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f4f8" />
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#64748b' }} interval={0} angle={-20} textAnchor="end" height={44} />
+                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} width={30} allowDecimals={false} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 9, paddingTop: 4 }} />
+                {allTriageTypes.map(t => (
+                  <Bar key={t} dataKey={t} stackId="a" fill={triageColors[t] ?? '#cbd5e1'} isAnimationActive={false} />
+                ))}
+                <Bar dataKey="_zero" stackId="a" fill="transparent" legendType="none" isAnimationActive={false}>
+                  <LabelList dataKey="_zero" position="top" content={({ x, y, width, index }) => {
+                    const t = (distData[index as number] as { _total?: number })?._total
+                    if (!t) return null
+                    return <text x={(x as number) + (width as number) / 2} y={(y as number) - 3} textAnchor="middle" fontSize={9} fontWeight={700} fill="#1e293b">{t}</text>
+                  }} />
+                </Bar>
+              </BarChart>
+          }
+        </Card>
+      </div>
+      <PageFooter label="Smoke Tests — Modules & Failures" />
+    </div>
+  )
+}
+
 // ── Root export ───────────────────────────────────────────────────────────────
-export default function ReportContent({ cycles, failed, allTitles, moduleCounts, triageColors }: Props) {
+export default function ReportContent({ cycles, failed, allTitles, moduleCounts, triageColors, smokeCycles = [], smokeResults = [] }: Props) {
   const now = new Date().toLocaleString()
+  const hasSmoke = smokeCycles.length > 0
+  const total = 4 + (hasSmoke ? 2 : 0)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-      <Page1 cycles={cycles} failed={failed} triageColors={triageColors} now={now} />
-      <Page2 cycles={cycles} now={now} />
-      <Page3 cycles={cycles} failed={failed} triageColors={triageColors} now={now} />
-      <Page4 cycles={cycles} allTitles={allTitles} moduleCounts={moduleCounts} now={now} />
+      <Page1 cycles={cycles} failed={failed} triageColors={triageColors} now={now} total={total} />
+      <Page2 cycles={cycles} now={now} total={total} />
+      <Page3 cycles={cycles} failed={failed} triageColors={triageColors} now={now} total={total} />
+      <Page4 cycles={cycles} allTitles={allTitles} moduleCounts={moduleCounts} now={now} total={total} />
+      {hasSmoke && <SmokePage1 smokeCycles={smokeCycles} now={now} page={5} total={total} />}
+      {hasSmoke && <SmokePage2 smokeCycles={smokeCycles} smokeResults={smokeResults} triageColors={triageColors} now={now} page={6} total={total} />}
     </div>
   )
 }

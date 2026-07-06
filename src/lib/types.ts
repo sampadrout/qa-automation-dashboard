@@ -1,5 +1,7 @@
 export type CycleStatus = 'processing' | 'ready' | 'error'
 
+export type CycleKind = 'regression' | 'smoke'
+
 export type TestState = 'passed' | 'failed' | 'pending'
 
 export type TriageType =
@@ -22,6 +24,7 @@ export interface Cycle {
   uploaded_at: string
   uploaded_by: string | null
   status: CycleStatus
+  kind: CycleKind
   total_tests: number
   passed: number
   failed: number

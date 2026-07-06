@@ -17,7 +17,7 @@ type Tab = typeof TABS[number]
 // ── Shared fetch helpers ──────────────────────────────────────────────────────
 async function fetchCycles(): Promise<Cycle[]> {
   const { data, error } = await supabase
-    .from('cycles').select('*').eq('status', 'ready').order('name')
+    .from('cycles').select('*').eq('status', 'ready').eq('kind', 'regression').order('name')
   if (error) throw error
   return data
 }
@@ -55,6 +55,33 @@ async function fetchAllTitles(): Promise<ScriptRow[]> {
   const { data, error } = await supabase.rpc('get_title_first_seen')
   if (error) throw error
   return data as ScriptRow[]
+}
+
+// Smoke bundle for the PDF: ready smoke cycles + their per-test module/state/triage rows.
+interface SmokeResultRow { cycle_id: string; module: string | null; state: string | null; triage_type: string | null }
+async function fetchSmokeReportBundle(): Promise<{ cycles: Cycle[]; results: SmokeResultRow[] }> {
+  const { data: cyc, error } = await supabase
+    .from('cycles').select('*').eq('kind', 'smoke').eq('status', 'ready').order('uploaded_at')
+  if (error) throw error
+  const cycles = cyc as Cycle[]
+  const ids = cycles.map(c => c.id)
+  if (ids.length === 0) return { cycles, results: [] }
+
+  const PAGE = 1000
+  const results: SmokeResultRow[] = []
+  let from = 0
+  while (true) {
+    const { data, error } = await supabase
+      .from('test_results')
+      .select('cycle_id, module, state, triage_type')
+      .in('cycle_id', ids)
+      .range(from, from + PAGE - 1)
+    if (error) throw error
+    results.push(...(data as SmokeResultRow[]))
+    if (data.length < PAGE) break
+    from += PAGE
+  }
+  return { cycles, results }
 }
 
 // ── Tooltip formatter ─────────────────────────────────────────────────────────
@@ -95,6 +122,52 @@ function filterCyclesBySprint<T extends { name: string }>(cycles: T[], start: st
     if (end   && d > end)   return false
     return true
   })
+}
+
+// ── Range limiting (keeps charts readable as run history grows) ────────────────
+const RANGE_OPTIONS = [10, 20, 50, 'all'] as const
+type RangeLimit = number | 'all'
+
+function limitTail<T>(arr: T[], limit: RangeLimit): T[] {
+  return limit === 'all' ? arr : arr.slice(-limit)
+}
+
+// Give each run a fixed horizontal slot so a long history scrolls instead of cramming.
+function chartWidth(n: number, perRun: number) {
+  return Math.max(680, n * perRun)
+}
+
+function RangeSelector({ value, onChange, shown, total }: { value: RangeLimit; onChange: (v: RangeLimit) => void; shown: number; total: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="text-gray-500 font-medium">Show:</span>
+      {RANGE_OPTIONS.map(opt => (
+        <button
+          key={String(opt)}
+          onClick={() => onChange(opt)}
+          className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+            value === opt ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-gray-600 border-gray-200 hover:border-brand-400'
+          }`}
+        >
+          {opt === 'all' ? 'All' : `Last ${opt}`}
+        </button>
+      ))}
+      <span className="text-gray-400 ml-1">Showing {shown} of {total} runs</span>
+    </div>
+  )
+}
+
+// Wraps a chart so it scrolls horizontally with a fixed per-run width.
+function ScrollChart({ count, perRun, height, children }: { count: number; perRun: number; height: number; children: React.ReactElement }) {
+  return (
+    <div className="overflow-x-auto">
+      <div style={{ width: chartWidth(count, perRun), minWidth: '100%', height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          {children}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
 }
 
 // ── Expandable cycle detail ───────────────────────────────────────────────────
@@ -234,7 +307,9 @@ function CycleExpanded({ cycleId }: { cycleId: string }) {
 function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd: string }) {
   const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 0 })
   const { data: failed = [], isLoading: lf } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
-  const cycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
+  const [rangeLimit, setRangeLimit] = useState<RangeLimit>(20)
+  const sprintCycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
+  const cycles = useMemo(() => limitTail(sprintCycles, rangeLimit), [sprintCycles, rangeLimit])
   const { colors: CHART_COLORS } = useTriageTypes()
 
   const cycleMap = useMemo(() =>
@@ -317,12 +392,17 @@ function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd
 
   return (
     <div className="space-y-8">
+      {/* Range selector */}
+      {sprintCycles.length > 1 && (
+        <RangeSelector value={rangeLimit} onChange={setRangeLimit} shown={cycles.length} total={sprintCycles.length} />
+      )}
+
       {/* Pass rate line chart */}
       <Section title="Pass Rate % Over Time">
-        <ResponsiveContainer width="100%" height={320}>
+        <ScrollChart count={passRateData.length} perRun={48} height={320}>
           <LineChart data={passRateData} margin={{ top: 24, right: 24, left: 0, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} angle={-30} textAnchor="end" height={56} />
             <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11, fill: '#6b7280' }} />
             <Tooltip formatter={pct} labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''} />
             <Line
@@ -339,7 +419,7 @@ function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd
               />
             </Line>
           </LineChart>
-        </ResponsiveContainer>
+        </ScrollChart>
       </Section>
 
       {/* Run summary table */}
@@ -402,10 +482,10 @@ function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd
 
       {/* Stacked bar: all modules, failures by triage type over time */}
       <Section title="Failure Distribution by Triage Type Over Time (All Modules)">
-        <ResponsiveContainer width="100%" height={360}>
+        <ScrollChart count={chartData.length} perRun={56} height={360}>
           <BarChart data={chartData} margin={{ top: 8, right: 24, left: 0, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} angle={-30} textAnchor="end" height={56} />
             <YAxis tick={{ fontSize: 12 }} width={35} />
             <Tooltip labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''} />
             <Legend
@@ -440,7 +520,7 @@ function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd
               />
             </Bar>
           </BarChart>
-        </ResponsiveContainer>
+        </ScrollChart>
       </Section>
 
       {/* Date × Triage type distribution */}
@@ -493,6 +573,9 @@ function SummaryTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd
 function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprintEnd: string }) {
   const { data: rawCycles = [], isLoading: lc } = useQuery({ queryKey: ['cycles-analytics'], queryFn: fetchCycles, staleTime: 5 * 60 * 1000 })
   const { data: allTitles = [], isLoading: lt } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 5 * 60 * 1000 })
+  const [rangeLimit, setRangeLimit] = useState<RangeLimit>(20)
+  // NOTE: first-seen detection must run over the FULL sprint window, so we keep `cycles`
+  // complete and only trim the displayed chart/table rows below.
   const cycles = useMemo(() => filterCyclesBySprint(rawCycles, sprintStart, sprintEnd), [rawCycles, sprintStart, sprintEnd])
   const cycleMap = useMemo(() =>
     Object.fromEntries(cycles.map(c => [c.id, c.name])), [cycles])
@@ -570,6 +653,11 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
     })
   }, [newByModule, datesSorted])
 
+  // Trimmed views for display (full data is retained for first-seen accuracy + CSV export)
+  const chartDataView  = useMemo(() => limitTail(chartData, rangeLimit), [chartData, rangeLimit])
+  const growthDataView = useMemo(() => limitTail(growthData, rangeLimit), [growthData, rangeLimit])
+  const tableDates     = useMemo(() => limitTail(datesSorted.slice(1), rangeLimit).slice().reverse(), [datesSorted, rangeLimit])
+
   // date → module → sorted list of test titles first seen on that date
   const newTitlesByDateModule = useMemo(() => {
     const map: Record<string, Record<string, string[]>> = {}
@@ -609,12 +697,17 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
 
   return (
     <div className="space-y-8">
+      {/* Range selector */}
+      {cycles.length > 1 && (
+        <RangeSelector value={rangeLimit} onChange={setRangeLimit} shown={limitTail(cycles, rangeLimit).length} total={cycles.length} />
+      )}
+
       {/* Stacked bar by module + cumulative line */}
       <Section title="New Scripts Added Per Run by Module">
-        <ResponsiveContainer width="100%" height={340}>
-          <ComposedChart data={chartData} margin={{ top: 16, right: 40, left: 0, bottom: 8 }}>
+        <ScrollChart count={chartDataView.length} perRun={52} height={340}>
+          <ComposedChart data={chartDataView} margin={{ top: 16, right: 40, left: 0, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} angle={-30} textAnchor="end" height={56} />
             <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
             <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} allowDecimals={false} />
             <Tooltip labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''} />
@@ -622,7 +715,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
             {modules.map(m => (
               <Bar key={m} yAxisId="left" dataKey={m} stackId="a" fill={moduleColors[m]}>
                 <LabelList dataKey="_total" position="top" content={({ x, y, width, index }) => {
-                  const v = (chartData[index as number] as Record<string, unknown>)?._total as number
+                  const v = (chartDataView[index as number] as Record<string, unknown>)?._total as number
                   if (!v) return null
                   return <text x={(x as number) + (width as number) / 2} y={(y as number) - 4} textAnchor="middle" fontSize={11} fontWeight={600} fill="#374151">{v}</text>
                 }} />
@@ -631,7 +724,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
             <Line yAxisId="right" type="monotone" dataKey="Cumulative Total"
               stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} />
           </ComposedChart>
-        </ResponsiveContainer>
+        </ScrollChart>
       </Section>
 
       {/* Test case growth per module over time — stacked area with module toggles */}
@@ -690,8 +783,8 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
         </button>
         </div>
 
-        <ResponsiveContainer width="100%" height={360}>
-          <AreaChart data={growthData} margin={{ top: 16, right: 24, left: 0, bottom: 8 }}>
+        <ScrollChart count={growthDataView.length} perRun={48} height={360}>
+          <AreaChart data={growthDataView} margin={{ top: 16, right: 24, left: 0, bottom: 8 }}>
             <defs>
               {modules.map(m => (
                 <linearGradient key={m} id={`grad-${m}`} x1="0" y1="0" x2="0" y2="1">
@@ -701,7 +794,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
               ))}
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7280' }} interval={0} angle={-30} textAnchor="end" height={56} />
             <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={44} />
             <Tooltip
               labelFormatter={(_, payload) => payload?.[0]?.payload?.date ?? ''}
@@ -722,7 +815,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
               />
             ))}
           </AreaChart>
-        </ResponsiveContainer>
+        </ScrollChart>
       </Section>
 
       {/* Date × Module new scripts table */}
@@ -743,7 +836,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {datesSorted.slice(1).slice().reverse().map(date => {
+              {tableDates.map(date => {
                 const mods = newByModule[date] ?? {}
                 const total = Object.values(mods).reduce((a, b) => a + b, 0)
                 const isExpanded = expandedDates.has(date)
@@ -1043,6 +1136,7 @@ export default function Analytics() {
   const { data: reportFailed = [] } = useQuery({ queryKey: ['failed-results'], queryFn: fetchFailedResults, staleTime: 0 })
   const { data: reportTitles = [] } = useQuery({ queryKey: ['all-titles'], queryFn: fetchAllTitles, staleTime: 5 * 60 * 1000 })
   const { data: reportModuleCounts = [] } = useQuery({ queryKey: ['module-counts'], queryFn: fetchModuleCounts, staleTime: 5 * 60 * 1000 })
+  const { data: reportSmoke = { cycles: [], results: [] } } = useQuery({ queryKey: ['smoke-report-bundle'], queryFn: fetchSmokeReportBundle, staleTime: 60_000 })
 
   async function handleExportPDF() {
     if (!reportRef.current) return
@@ -1073,6 +1167,8 @@ export default function Analytics() {
           allTitles={reportTitles}
           moduleCounts={reportModuleCounts}
           triageColors={triageColors}
+          smokeCycles={reportSmoke.cycles}
+          smokeResults={reportSmoke.results}
         />
       </div>
 

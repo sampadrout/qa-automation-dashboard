@@ -15,8 +15,7 @@ export interface ParsedRow {
 }
 
 // Mirrors Python process_index_json
-function processIndexJson(content: string, moduleName: string): ParsedRow[] {
-  const data = JSON.parse(content)
+function processIndexJson(data: Record<string, unknown>, moduleName: string): ParsedRow[] {
   const rows: ParsedRow[] = []
 
   function pushTests(tests: Record<string, unknown>[], currentFile: string, suiteTitle: string) {
@@ -70,7 +69,24 @@ function parseCsv(text: string): ParsedRow[] {
   if (lines.length < 2) return []
 
   const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim())
-  const idx = (name: string) => headers.indexOf(name)
+  // Resolve a column by any of its accepted header aliases (the app's CSV export uses
+  // "#" / "Triage Type" / "Triage Desc"; older/importer format uses "Row #" / "TriageType" / "TriageDesc").
+  const col = (...names: string[]) => {
+    for (const n of names) { const i = headers.indexOf(n); if (i >= 0) return i }
+    return -1
+  }
+  const idxRow      = col('Row #', '#')
+  const idxModule   = col('Module')
+  const idxFile     = col('File')
+  const idxSuites   = col('Suites')
+  const idxTitle    = col('Test Title')
+  const idxFull     = col('Full Title')
+  const idxState    = col('State')
+  const idxDuration = col('Duration (s)')
+  const idxError    = col('Error')
+  const idxTriage   = col('TriageType', 'Triage Type')
+  const idxDesc     = col('TriageDesc', 'Triage Desc')
+
   const valid = new Set(['passed', 'failed', 'pending', 'skipped'])
   const rows: ParsedRow[] = []
 
@@ -88,28 +104,34 @@ function parseCsv(text: string): ParsedRow[] {
     }
     cells.push(cur)
 
-    const get = (name: string) => str(cells[idx(name)])
-    const state = (get('State') ?? '').toLowerCase()
+    const get = (i: number) => (i >= 0 ? str(cells[i]) : null)
+    const state = (get(idxState) ?? '').toLowerCase()
     if (!valid.has(state)) continue
 
     rows.push({
-      row_num: parseInt(cells[idx('Row #')]) || i,
-      module: get('Module'),
-      file: get('File'),
-      suites: get('Suites'),
-      test_title: get('Test Title'),
-      full_title: get('Full Title'),
+      row_num: parseInt(cells[idxRow]) || i,
+      module: get(idxModule),
+      file: get(idxFile),
+      suites: get(idxSuites),
+      test_title: get(idxTitle),
+      full_title: get(idxFull),
       state,
-      duration_s: parseFloat(cells[idx('Duration (s)')]) || null,
-      error: get('Error'),
-      triage_type: get('TriageType'),
-      triage_desc: get('TriageDesc'),
+      duration_s: parseFloat(cells[idxDuration]) || null,
+      error: get(idxError),
+      triage_type: get(idxTriage),
+      triage_desc: get(idxDesc),
     })
   }
   return rows
 }
 
-export async function extractZip(file: File): Promise<{ cycleName: string; rows: ParsedRow[] }> {
+// Parse a raw CSV string into valid test rows (used for direct .csv uploads).
+export function parseCsvRows(text: string): ParsedRow[] {
+  const valid = new Set(['passed', 'failed', 'pending', 'skipped'])
+  return parseCsv(text).filter(r => valid.has(r.state))
+}
+
+export async function extractZip(file: File): Promise<{ cycleName: string; rows: ParsedRow[]; startedAt: string | null }> {
   const cycleName = file.name.replace(/\.zip$/i, '')
   const zip = await JSZip.loadAsync(await file.arrayBuffer())
 
@@ -118,6 +140,7 @@ export async function extractZip(file: File): Promise<{ cycleName: string; rows:
   const jsonFiles = all.filter(f => f.endsWith('index.json')  && !zip.files[f].dir)
 
   let rows: ParsedRow[] = []
+  let startedAt: string | null = null
 
   if (csvFiles.length > 0) {
     const content = await zip.files[csvFiles[0]].async('string')
@@ -127,7 +150,10 @@ export async function extractZip(file: File): Promise<{ cycleName: string; rows:
       const parts = jf.split('/')
       const moduleName = parts.length >= 2 ? parts[parts.length - 2] : 'unknown'
       const content = await zip.files[jf].async('string')
-      rows.push(...processIndexJson(content, moduleName))
+      const data = JSON.parse(content) as Record<string, unknown>
+      const start = (data.stats as { start?: string } | undefined)?.start
+      if (start && (!startedAt || start < startedAt)) startedAt = start
+      rows.push(...processIndexJson(data, moduleName))
     }
     rows.forEach((r, i) => { r.row_num = i + 1 })
   } else {
@@ -138,5 +164,5 @@ export async function extractZip(file: File): Promise<{ cycleName: string; rows:
   rows = rows.filter(r => valid.has(r.state))
 
   if (rows.length === 0) throw new Error('No valid test rows found in ZIP')
-  return { cycleName, rows }
+  return { cycleName, rows, startedAt }
 }
