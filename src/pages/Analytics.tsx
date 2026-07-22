@@ -42,19 +42,46 @@ async function fetchFailedResults(): Promise<FailedRow[]> {
 }
 
 interface ModuleCountRow { cycle_id: string; module: string; test_count: number }
+// Paginated: this grows with (cycles × modules) and will eventually exceed the
+// PostgREST 1000-row cap, silently truncating the most recent cycles otherwise.
 async function fetchModuleCounts(): Promise<ModuleCountRow[]> {
-  const { data, error } = await supabase.rpc('get_module_counts_per_cycle')
-  if (error) throw error
-  return data as ModuleCountRow[]
+  const PAGE = 1000
+  const all: ModuleCountRow[] = []
+  let from = 0
+  while (true) {
+    const { data, error } = await supabase
+      .rpc('get_module_counts_per_cycle')
+      .range(from, from + PAGE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as ModuleCountRow[]
+    all.push(...rows)
+    if (rows.length < PAGE) break
+    from += PAGE
+  }
+  return all
 }
 
 interface ScriptRow { cycle_id: string; test_title: string | null; module: string | null }
 // Fetches only the FIRST occurrence of each distinct test_title via a DB-side DISTINCT ON.
 // This is O(distinct titles) instead of O(all test rows), making tab load vastly faster.
+// NOTE: PostgREST caps a single response at db-max-rows (1000), so we MUST paginate —
+// otherwise distinct titles beyond the first 1000 (ordered by test_title) are silently
+// dropped and never counted as new scripts.
 async function fetchAllTitles(): Promise<ScriptRow[]> {
-  const { data, error } = await supabase.rpc('get_title_first_seen')
-  if (error) throw error
-  return data as ScriptRow[]
+  const PAGE = 1000
+  const all: ScriptRow[] = []
+  let from = 0
+  while (true) {
+    const { data, error } = await supabase
+      .rpc('get_title_first_seen')
+      .range(from, from + PAGE - 1)
+    if (error) throw error
+    const rows = (data ?? []) as ScriptRow[]
+    all.push(...rows)
+    if (rows.length < PAGE) break
+    from += PAGE
+  }
+  return all
 }
 
 // Smoke bundle for the PDF: ready smoke cycles + their per-test module/state/triage rows.
@@ -582,6 +609,23 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
 
   const datesSorted = useMemo(() => cycles.map(c => c.name), [cycles])
 
+  // The very first regression run in global history is the baseline where every
+  // script legitimately counts as "new"; that single run is excluded from the
+  // "new per run" views. We derive it from the FULL cycle list (rawCycles), NOT
+  // the sprint-filtered window — otherwise the first run of a selected sprint gets
+  // dropped and its genuinely-new scripts disappear.
+  const globalFirstRun = useMemo(() => {
+    const names = rawCycles.map(c => c.name)
+    return names.length ? names.reduce((a, b) => (b < a ? b : a)) : ''
+  }, [rawCycles])
+
+  // Runs shown in the "new per run" chart/table: every run in the window except
+  // the global baseline run (only ever present in the all-time view).
+  const displayDates = useMemo(
+    () => datesSorted.filter(d => d !== globalFirstRun),
+    [datesSorted, globalFirstRun],
+  )
+
   // For each test_title: first seen date, module (derived from the first-seen RPC result)
   const titleStats = useMemo(() => {
     const map: Record<string, { firstSeen: string; lastSeen: string; runs: Set<string>; module: string }> = {}
@@ -624,16 +668,16 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
     return map
   }, [titleStats, datesSorted])
 
-  // Stacked bar + cumulative line chart data — skip first date (all tests appear new there)
+  // Stacked bar + cumulative line chart data — excludes only the global baseline run
   const chartData = useMemo(() => {
     let cumulative = 0
-    return datesSorted.slice(1).map(date => {
+    return displayDates.map(date => {
       const modCounts = newByModule[date] ?? {}
       const total = Object.values(modCounts).reduce((a, b) => a + b, 0)
       cumulative += total
       return { date, label: fmtDate(date), ...modCounts, 'Cumulative Total': cumulative, _total: total }
     })
-  }, [newByModule, datesSorted])
+  }, [newByModule, displayDates])
 
   // Module colour palette (cycles through fixed set)
   const MODULE_PALETTE = ['#4f6ef7','#22c55e','#f97316','#a855f7','#ec4899','#14b8a6','#f59e0b','#64748b','#ef4444','#06b6d4']
@@ -656,7 +700,7 @@ function NewScriptsTab({ sprintStart, sprintEnd }: { sprintStart: string; sprint
   // Trimmed views for display (full data is retained for first-seen accuracy + CSV export)
   const chartDataView  = useMemo(() => limitTail(chartData, rangeLimit), [chartData, rangeLimit])
   const growthDataView = useMemo(() => limitTail(growthData, rangeLimit), [growthData, rangeLimit])
-  const tableDates     = useMemo(() => limitTail(datesSorted.slice(1), rangeLimit).slice().reverse(), [datesSorted, rangeLimit])
+  const tableDates     = useMemo(() => limitTail(displayDates, rangeLimit).slice().reverse(), [displayDates, rangeLimit])
 
   // date → module → sorted list of test titles first seen on that date
   const newTitlesByDateModule = useMemo(() => {
